@@ -1,0 +1,3611 @@
+"use strict";
+
+// Tauri 2: window.__TAURI__ is injected because withGlobalTauri=true
+const { invoke }         = window.__TAURI__.core;
+const { convertFileSrc } = window.__TAURI__.core;
+
+// ── Link checker ─────────────────────────────────────────────────────────
+// Column config: id → CSS-var suffix, label, default width
+const CHK_COLS = [
+  { id: "url",  label: "URL",    cls: "cl-url",  var: "--cw-url",  w: 240, num: false },
+  { id: "st",   label: "Статус", cls: "cl-st",   var: "--cw-st",   w: 58,  num: false },
+  { id: "code", label: "HTTP",   cls: "cl-code", var: "--cw-code", w: 42,  num: true  },
+  { id: "ms",   label: "Время",  cls: "cl-ms",   var: "--cw-ms",   w: 52,  num: true  },
+];
+let chkSort    = { col: null, asc: true };
+let chkResults = [];   // all results for sort/re-render
+
+function applyColWidths(log) {
+  CHK_COLS.forEach(c => log.style.setProperty(c.var, c.w + "px"));
+}
+
+function buildChkHeader() {
+  const head = document.getElementById("chk-log-head");
+  const log  = document.getElementById("chk-log");
+  head.innerHTML = "";
+  applyColWidths(log);
+
+  CHK_COLS.forEach((col, i) => {
+    const cell = document.createElement("div");
+    cell.className = `${col.cls} chk-col-head`;
+    cell.dataset.col = col.id;
+
+    const lbl  = document.createElement("span");
+    lbl.textContent = col.label;
+    const icon = document.createElement("span");
+    icon.className = "chk-sort-icon";
+    icon.id = `chk-si-${col.id}`;
+    const handle = document.createElement("div");
+    handle.className = "chk-resize-handle";
+
+    cell.append(lbl, icon, handle);
+    if (i === CHK_COLS.length - 1) cell.style.borderRight = "none";
+    head.appendChild(cell);
+
+    // Sort on click (not on handle)
+    cell.addEventListener("click", (e) => {
+      if (e.target === handle) return;
+      if (chkSort.col === col.id) chkSort.asc = !chkSort.asc;
+      else { chkSort.col = col.id; chkSort.asc = true; }
+      renderChkTable();
+    });
+
+    // Resize
+    handle.addEventListener("mousedown", (e) => {
+      e.stopPropagation(); e.preventDefault();
+      const startX = e.clientX, startW = col.w;
+      function onMove(ev) {
+        col.w = Math.max(36, startW + ev.clientX - startX);
+        applyColWidths(log);
+      }
+      function onUp() {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+      }
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+  });
+}
+
+function makeChkRow(r) {
+  const row = document.createElement("div");
+  let cls, st;
+  if (r.timed_out)      { cls = "cl-err";  st = "Timeout"; }
+  else if (r.redirect)  { cls = "cl-warn"; st = "Redirect"; }
+  else if (r.ok)        { cls = "cl-ok";   st = "OK"; }
+  else                  { cls = "cl-err";  st = "Ошибка"; }
+  const rowCls = (!r.ok || r.redirect) ? (r.redirect ? "cl-warn" : "cl-err") : "";
+  row.className = "cl-row " + rowCls;
+  const ms   = r.ms < 1000 ? `${r.ms}ms` : `${(r.ms/1000).toFixed(1)}s`;
+  const code = r.status || (r.timed_out ? "T/O" : "—");
+  const urlStr = r.url.replace(/^https?:\/\/(www\.)?/, "");
+  row.innerHTML =
+    `<div class="cl-url" title="${r.url}">${urlStr}</div>` +
+    `<div class="cl-st ${cls}">${st}</div>` +
+    `<div class="cl-code">${code}</div>` +
+    `<div class="cl-ms">${ms}</div>`;
+  return row;
+}
+
+function renderChkTable() {
+  const body = document.getElementById("chk-log-body");
+  const scroll = body.scrollTop;
+  body.innerHTML = "";
+
+  let rows = [...chkResults];
+  if (chkSort.col) {
+    const col = CHK_COLS.find(c => c.id === chkSort.col);
+    rows.sort((a, b) => {
+      let va, vb;
+      if (col.id === "ms")   { va = a.ms    || 0; vb = b.ms    || 0; }
+      else if (col.id === "code") { va = a.status || 0; vb = b.status || 0; }
+      else if (col.id === "st")   { va = a.ok ? "OK" : "Ошибка"; vb = b.ok ? "OK" : "Ошибка"; }
+      else { va = a.url || ""; vb = b.url || ""; }
+      if (col.num || col.id === "ms" || col.id === "code") {
+        return chkSort.asc ? va - vb : vb - va;
+      }
+      return chkSort.asc ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
+    });
+  }
+  rows.forEach(r => body.appendChild(makeChkRow(r)));
+
+  // Update sort icons
+  CHK_COLS.forEach(c => {
+    const icon = document.getElementById(`chk-si-${c.id}`);
+    if (icon) icon.textContent = chkSort.col === c.id ? (chkSort.asc ? " ▲" : " ▼") : "";
+  });
+
+  body.scrollTop = chkSort.col ? 0 : scroll;
+}
+const checkerPanel   = document.getElementById("checker-panel");
+const chkLogBody     = document.getElementById("chk-log-body");
+const chkStatusText  = document.getElementById("chk-status-text");
+const chkBarFill     = document.getElementById("chk-bar-fill");
+const chkStartBtn    = document.getElementById("chk-start");
+const chkPauseBtn    = document.getElementById("chk-pause");
+const chkStopBtn     = document.getElementById("chk-stop");
+const chkBody        = document.getElementById("chk-body");
+
+const CC = {
+  total:     document.getElementById("cc-total"),
+  done:      document.getElementById("cc-done"),
+  errors:    document.getElementById("cc-errors"),
+  redirects: document.getElementById("cc-redirects"),
+  timeouts:  document.getElementById("cc-timeouts"),
+};
+
+let _ck = {
+  bookmarks: [], folderNode: null,
+  running: false, paused: false, cancelled: false,
+  done: 0, errors: 0, redirects: 0, timeouts: 0,
+};
+
+function getBookmarksUnder(folderId) {
+  const result = [];
+  const visit = (id) => {
+    for (const n of allNodes) {
+      if (n.parent !== id) continue;
+      if (n.kind === "bookmark" && n.url) result.push(n);
+      else if (n.kind === "folder") visit(n.id);
+    }
+  };
+  visit(folderId);
+  return result;
+}
+
+// Re-render tree preserving expanded state
+// ── Tree open-state helpers ────────────────────────────────────────────────────
+
+function saveOpenState() {
+  return new Set(
+    [...treeEl.querySelectorAll('.tree-item.open')]
+      .map(el => parseInt(el.dataset.id, 10))
+      .filter(n => !isNaN(n))
+  );
+}
+
+function restoreOpenState(openIds) {
+  openIds.forEach(id => {
+    const item = treeEl.querySelector(`.tree-item[data-id="${id}"]`);
+    if (!item) return;
+    const ch = item.parentElement?.querySelector(':scope > .tree-children');
+    if (ch) { ch.classList.add('open'); item.classList.add('open'); }
+  });
+}
+
+// ── Inline folder rename ───────────────────────────────────────────────────────
+
+function startInlineRename(folderId) {
+  const item = treeEl.querySelector(`.tree-item[data-id="${folderId}"]`);
+  if (!item) return;
+  const labelEl = item.querySelector('.label');
+  if (!labelEl) return;
+  const orig = labelEl.textContent;
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'tree-inline-rename';
+  input.value = orig;
+  labelEl.replaceWith(input);
+  input.select();
+
+  let committed = false;
+
+  async function commit() {
+    if (committed) return;
+    committed = true;
+    const newName = input.value.trim() || orig;
+    const span = document.createElement('span');
+    span.className = 'label';
+    span.textContent = newName;
+    input.replaceWith(span);
+    if (newName !== orig) {
+      try {
+        await invoke('rename_node', { id: folderId, title: newName });
+        const node = allNodes.find(n => n.id === folderId);
+        if (node) node.title = newName;
+        allFolders = allNodes.filter(n => n.kind === 'folder');
+        if (activeFolderId === folderId)
+          breadcrumb.textContent = buildBreadcrumbText(folderId);
+      } catch(e) { console.error(e); }
+    }
+  }
+
+  function cancel() {
+    if (committed) return;
+    committed = true;
+    const span = document.createElement('span');
+    span.className = 'label';
+    span.textContent = orig;
+    input.replaceWith(span);
+  }
+
+  input.addEventListener('blur', commit);
+  input.addEventListener('keydown', e => {
+    e.stopPropagation();
+    if (e.key === 'Enter')  { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { cancel(); }
+  });
+}
+
+// ── Create folder + select + inline rename ────────────────────────────────────
+
+async function createFolderAndRename(parentId) {
+  try {
+    const openIds = saveOpenState();
+    const newId = await invoke('create_folder', { parentId, title: 'Новая папка' });
+    allNodes = await invoke('get_tree');
+    allFolders = allNodes.filter(n => n.kind === 'folder');
+    renderTree();
+    restoreOpenState(openIds);
+
+    // If subfolder — expand parent
+    if (parentId != null) {
+      const parentItem = treeEl.querySelector(`.tree-item[data-id="${parentId}"]`);
+      const ch = parentItem?.parentElement?.querySelector(':scope > .tree-children');
+      if (ch) { ch.classList.add('open'); parentItem?.classList.add('open'); }
+    }
+
+    await selectFolder(newId);
+    treeEl.querySelector(`.tree-item[data-id="${newId}"]`)?.scrollIntoView({ block: 'nearest' });
+    startInlineRename(newId);
+  } catch(e) { console.error(e); }
+}
+
+async function refreshTree() {
+  const openIds = saveOpenState();
+  allNodes   = await invoke("get_tree");
+  allFolders = allNodes.filter(n => n.kind === "folder");
+  renderTree();
+  restoreOpenState(openIds);
+  if (activeFolderId != null) loadBookmarks(activeFolderId);
+}
+
+function openCheckerPanel(folderNode, bookmarkListOverride) {
+  const bm = bookmarkListOverride ?? getBookmarksUnder(folderNode?.id ?? -1);
+  _ck = { bookmarks: bm, folderNode,
+          running: false, paused: false, cancelled: false,
+          done: 0, errors: 0, redirects: 0, timeouts: 0 };
+  CC.total.textContent     = _ck.bookmarks.length;
+  CC.done.textContent      = "0";
+  CC.errors.textContent    = "0";
+  CC.redirects.textContent = "0";
+  CC.timeouts.textContent  = "0";
+  chkBarFill.style.width   = "0%";
+  chkStatusText.textContent = "Готов к проверке";
+  chkResults = [];
+  chkSort    = { col: null, asc: true };
+  buildChkHeader();
+  chkLogBody.innerHTML = "";
+  chkStartBtn.disabled   = false;
+  chkPauseBtn.disabled   = true;
+  chkStopBtn.disabled    = true;
+  checkerPanel.classList.remove("hidden");
+  chkBody.classList.remove("hidden");
+}
+
+function addCheckerRow(result, title) {
+  chkResults.push({ ...result, title });
+  chkLogBody.appendChild(makeChkRow(result));
+  chkLogBody.scrollTop = chkLogBody.scrollHeight;
+}
+
+async function runChecker() {
+  _ck.running = true; _ck.paused = false; _ck.cancelled = false;
+  chkStartBtn.disabled  = true;
+  chkPauseBtn.disabled  = false;
+  chkStopBtn.disabled   = false;
+
+  const total = _ck.bookmarks.length;
+  const BATCH = 5;
+
+  for (let i = _ck.done; i < total && !_ck.cancelled; i += BATCH) {
+    // Pause: wait until unpaused
+    while (_ck.paused && !_ck.cancelled) {
+      await new Promise(r => setTimeout(r, 150));
+    }
+    if (_ck.cancelled) break;
+
+    const batch = _ck.bookmarks.slice(i, i + BATCH);
+    await Promise.all(batch.map(async (b) => {
+      if (_ck.cancelled) return;
+      chkStatusText.textContent = "Проверяется: " + b.url;
+
+      const r = await invoke("check_url", { url: b.url }).catch(err => ({
+        url: b.url, status: 0, ok: false, timed_out: false,
+        redirect: null, ms: 0, err: String(err)
+      }));
+
+      _ck.done++;
+      if (!r.ok)       _ck.errors++;
+      if (r.redirect)  _ck.redirects++;
+      if (r.timed_out) _ck.timeouts++;
+
+      CC.done.textContent      = _ck.done;
+      CC.errors.textContent    = _ck.errors;
+      CC.redirects.textContent = _ck.redirects;
+      CC.timeouts.textContent  = _ck.timeouts;
+      chkBarFill.style.width   = Math.round(_ck.done / total * 100) + "%";
+
+      if (!r.ok) {
+        treeEl.querySelector(`.tree-item[data-id="${b.id}"]`)?.classList.add("broken");
+      }
+      addCheckerRow(r, b.title);
+    }));
+  }
+
+  _ck.running = false;
+  chkPauseBtn.disabled = true;
+  chkStopBtn.disabled  = true;
+  chkStartBtn.disabled = _ck.done >= total;
+  chkStatusText.textContent = _ck.cancelled
+    ? `Остановлено. Проверено: ${_ck.done}, ошибок: ${_ck.errors}`
+    : `Завершено. Всего: ${total}, ошибок: ${_ck.errors}, redirect: ${_ck.redirects}`;
+  chkBarFill.style.width = _ck.cancelled ? chkBarFill.style.width : "100%";
+}
+
+// Draggable panel
+(function () {
+  const titlebar = document.getElementById("chk-titlebar");
+  let drag = { on: false, ox: 0, oy: 0 };
+  titlebar.addEventListener("mousedown", (e) => {
+    if (e.target.closest("button")) return;
+    drag.on = true;
+    const r = checkerPanel.getBoundingClientRect();
+    // Switch from bottom/right to top/left
+    checkerPanel.style.bottom = "auto";
+    checkerPanel.style.right  = "auto";
+    checkerPanel.style.left   = r.left + "px";
+    checkerPanel.style.top    = r.top  + "px";
+    drag.ox = e.clientX - r.left;
+    drag.oy = e.clientY - r.top;
+    e.preventDefault();
+  });
+  document.addEventListener("mousemove", (e) => {
+    if (!drag.on) return;
+    const pw = checkerPanel.offsetWidth, ph = checkerPanel.offsetHeight;
+    checkerPanel.style.left = Math.max(0, Math.min(window.innerWidth  - pw, e.clientX - drag.ox)) + "px";
+    checkerPanel.style.top  = Math.max(0, Math.min(window.innerHeight - ph, e.clientY - drag.oy)) + "px";
+  });
+  document.addEventListener("mouseup", () => { drag.on = false; });
+})();
+
+chkStartBtn.onclick   = () => { if (!_ck.running) runChecker(); };
+chkPauseBtn.onclick   = () => {
+  _ck.paused = !_ck.paused;
+  chkPauseBtn.textContent = _ck.paused ? "Продолжить" : "Пауза";
+  chkStatusText.textContent = _ck.paused ? "Пауза…" : chkStatusText.textContent;
+};
+chkStopBtn.onclick    = () => { _ck.cancelled = true; _ck.paused = false; };
+document.getElementById("chk-close2").onclick  = () => checkerPanel.classList.add("hidden");
+document.getElementById("chk-close-btn").onclick = () => checkerPanel.classList.add("hidden");
+document.getElementById("chk-collapse").onclick = () => {
+  chkBody.classList.toggle("hidden");
+  document.getElementById("chk-collapse").textContent =
+    chkBody.classList.contains("hidden") ? "□" : "─";
+};
+
+// ── Duplicate finder ─────────────────────────────────────────────────────
+// ── Duplicates finder (full utility) ─────────────────────────────────────────
+
+const dupesOverlay   = document.getElementById("dupes-overlay");
+const dupesSummaryEl = document.getElementById("dupes-summary");
+
+makeDlgDraggable(document.getElementById("dupes-dlg"),
+  document.querySelector("#dupes-dlg .props-drag-handle"));
+
+let _dGroups      = [];
+let _dGroupIdx    = -1;
+let _dRowIdx      = -1;
+let _dSortCol     = 't';
+let _dSortDesc    = false;
+let _dRows        = [];
+let _dTableInited = false; // listeners added only once
+
+function findDuplicates() {
+  const map = new Map();
+  allNodes.filter(n => n.kind === "bookmark" && n.url).forEach(n => {
+    const key = n.url.toLowerCase().replace(/\/+$/, "");
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(n);
+  });
+  return [...map.entries()]
+    .filter(([, ns]) => ns.length > 1)
+    .sort((a, b) => b[1].length - a[1].length)
+    .map(([url, nodes]) => ({ url, nodes }));
+}
+
+function _dSummary() {
+  if (!_dGroups.length) { dupesSummaryEl.textContent = "Дубликаты не найдены."; return; }
+  const total = _dGroups.reduce((s, g) => s + g.nodes.length, 0);
+  const extra = _dGroups.reduce((s, g) => s + g.nodes.length - 1, 0);
+  dupesSummaryEl.textContent =
+    `Групп: ${_dGroups.length}  ·  Копий: ${total}  ·  Лишних: ${extra}`;
+}
+
+function _dRenderGroups() {
+  const el = document.getElementById('dupes-groups');
+  el.innerHTML = '';
+  if (!_dGroups.length) {
+    el.innerHTML = '<div class="dup-empty">Нет дубликатов.</div>'; return;
+  }
+  _dGroups.forEach((g, i) => {
+    const item = document.createElement('div');
+    item.className = 'dupes-group-item' + (i === _dGroupIdx ? ' selected' : '');
+    const short = g.url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/+$/, '');
+    item.innerHTML = `<span class="dgi-url" title="${g.url}">${short}</span>`
+                   + `<span class="dgi-cnt">${g.nodes.length}</span>`;
+    item.addEventListener('click', () => _dSelectGroup(i));
+    el.appendChild(item);
+  });
+}
+
+function _dSortedRows(nodes) {
+  return [...nodes].sort((a, b) => {
+    let va, vb;
+    switch(_dSortCol) {
+      case 'u': va = a.url    || ''; vb = b.url    || ''; break;
+      case 'f': va = getFolderPath(a.parent) || ''; vb = getFolderPath(b.parent) || ''; break;
+      case 'd': va = a.created|| ''; vb = b.created|| ''; break;
+      default:  va = a.title  || ''; vb = b.title  || ''; break;
+    }
+    return _dSortDesc ? vb.localeCompare(va) : va.localeCompare(vb);
+  });
+}
+
+function _dRenderTable(nodes) {
+  _dRows    = _dSortedRows(nodes);
+  _dRowIdx  = -1;
+  const tbody = document.getElementById('dupes-tbody');
+  tbody.innerHTML = '';
+  if (!_dRows.length) {
+    tbody.innerHTML = `<tr><td colspan="4" class="dupes-td" style="text-align:center;color:#888;padding:16px">Нет данных</td></tr>`;
+    return;
+  }
+  _dRows.forEach((node, i) => {
+    const tr = document.createElement('tr');
+    tr.className = 'dupes-row';
+    const folder = getFolderPath(node.parent) || '—';
+    const date   = parseUADate(node.created)  || '—';
+    tr.innerHTML = `<td class="dupes-td" title="${node.title}"><span>${node.title}</span></td>`
+                 + `<td class="dupes-td dupes-td-url" title="${node.url}"><span>${node.url}</span></td>`
+                 + `<td class="dupes-td" title="${folder}"><span>${folder}</span></td>`
+                 + `<td class="dupes-td" title="${date}"><span>${date}</span></td>`;
+    tr.addEventListener('click', () => {
+      _dRowIdx = i;
+      tbody.querySelectorAll('.dupes-row').forEach((r,ri) => r.classList.toggle('selected', ri===i));
+      _dUpdateBtns();
+      // Single click → navigate
+      navigateToCard(node);
+    });
+    tr.addEventListener('dblclick', () => { if (node.url) openWithBrowser(node.url, getDefaultBrowserPath()); });
+    tbody.appendChild(tr);
+  });
+}
+
+function _dSelectGroup(idx) {
+  _dGroupIdx = idx; _dRowIdx = -1;
+  _dRenderGroups();
+  const g = _dGroups[idx];
+  document.getElementById('dupes-right-hdr').textContent =
+    g ? `Дубликаты (${g.nodes.length}): ${g.url.replace(/^https?:\/\/(www\.)?/,'').substring(0,60)}` : 'Дубликаты';
+  _dRenderTable(g?.nodes || []);
+  _dUpdateBtns();
+}
+
+function _dUpdateBtns() {
+  const hasRow   = _dRowIdx >= 0 && _dGroupIdx >= 0;
+  const hasGroup = _dGroupIdx >= 0 && (_dGroups[_dGroupIdx]?.nodes.length ?? 0) > 1;
+  document.getElementById('dupes-del-one').disabled  = !hasRow;
+  document.getElementById('dupes-keep-one').disabled = !hasGroup;
+  document.getElementById('dupes-export').disabled   = _dGroups.length === 0;
+}
+
+// ── Sort & resize init ──────────────────────────────────────────────────────
+
+function _dInitTable() {
+  const table = document.getElementById('dupes-table');
+  // Sort headers
+  document.querySelectorAll('#dupes-table .dupes-th').forEach(th => {
+    th.style.position = 'sticky';
+    th.addEventListener('click', e => {
+      if (e.target.classList.contains('dupes-rsz')) return;
+      const col = th.dataset.col;
+      if (_dSortCol === col) _dSortDesc = !_dSortDesc;
+      else { _dSortCol = col; _dSortDesc = false; }
+      document.querySelectorAll('.dupes-th .th-lbl').forEach(l => {
+        const c = l.closest('.dupes-th').dataset.col;
+        const arr = c === _dSortCol ? (_dSortDesc ? ' ↓' : ' ↑') : '';
+        l.textContent = l.textContent.replace(/ [↑↓]$/, '') + arr;
+      });
+      if (_dGroupIdx >= 0) _dRenderTable(_dGroups[_dGroupIdx].nodes);
+    });
+  });
+  // Resize handles
+  document.querySelectorAll('#dupes-table .dupes-rsz').forEach(handle => {
+    const th = handle.closest('th');
+    handle.addEventListener('mousedown', e => {
+      e.preventDefault();
+      const startX = e.clientX, startW = th.offsetWidth;
+      const v = '--dw-' + th.dataset.col;
+      const move = ev => table.style.setProperty(v, Math.max(60, startW + ev.clientX - startX) + 'px');
+      const up   = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', up);
+    });
+  });
+}
+
+// ── Action buttons ──────────────────────────────────────────────────────────
+
+document.getElementById('dupes-del-one').addEventListener('click', () => {
+  if (_dRowIdx < 0 || _dGroupIdx < 0) return;
+  const node = _dRows[_dRowIdx];
+  const g    = _dGroups[_dGroupIdx];
+  deleteConfirm(`Удалить «${node.title}»?`, async () => {
+    await invoke('delete_node', { id: node.id });
+    const ai = allNodes.findIndex(n => n.id === node.id);
+    if (ai >= 0) allNodes.splice(ai, 1);
+    const ni = g.nodes.findIndex(n => n.id === node.id);
+    if (ni >= 0) g.nodes.splice(ni, 1);
+    if (g.nodes.length < 2) {
+      _dGroups.splice(_dGroupIdx, 1);
+      _dGroupIdx = Math.min(_dGroupIdx, _dGroups.length - 1);
+    }
+    _dRowIdx = -1;
+    _dSummary(); _dRenderGroups();
+    if (_dGroupIdx >= 0) _dSelectGroup(_dGroupIdx);
+    else _dRenderTable([]);
+    _dUpdateBtns();
+    refreshTree();
+  });
+});
+
+document.getElementById('dupes-keep-one').addEventListener('click', () => {
+  if (_dGroupIdx < 0) return;
+  const g = _dGroups[_dGroupIdx];
+  if (!g || g.nodes.length < 2) return;
+  const toDelete = g.nodes.slice(1);
+  deleteConfirm(`Удалить ${toDelete.length} дубликат(ов)?`, async () => {
+    for (const node of toDelete) {
+      await invoke('delete_node', { id: node.id });
+      const ai = allNodes.findIndex(n => n.id === node.id);
+      if (ai >= 0) allNodes.splice(ai, 1);
+    }
+    g.nodes = [g.nodes[0]];
+    _dGroups.splice(_dGroupIdx, 1);
+    _dGroupIdx = Math.min(_dGroupIdx, _dGroups.length - 1);
+    _dRowIdx = -1;
+    _dSummary(); _dRenderGroups();
+    if (_dGroupIdx >= 0) _dSelectGroup(_dGroupIdx);
+    else _dRenderTable([]);
+    _dUpdateBtns();
+    refreshTree();
+  });
+});
+
+document.getElementById('dupes-export').addEventListener('click', () => {
+  let text = `Поиск дубликатов ссылок\n${'='.repeat(44)}\n\n`;
+  _dGroups.forEach((g, i) => {
+    text += `Группа ${i + 1}: ${g.url}\n`;
+    g.nodes.forEach(n => {
+      text += `  ${n.title}\n    ${getFolderPath(n.parent) || '—'}\n`;
+    });
+    text += '\n';
+  });
+  invoke('save_text_file', { content: text, defaultName: 'duplicates.txt' })
+    .catch(e => { if (e !== 'Отменено') console.error(e); });
+});
+
+function closeDupesDialog() { dupesOverlay.classList.add("hidden"); }
+
+document.getElementById("dupes-x").onclick         = closeDupesDialog;
+document.getElementById("dupes-close-btn").onclick = closeDupesDialog;
+dupesOverlay.addEventListener("click", e => { if (e.target === dupesOverlay) closeDupesDialog(); });
+
+function openDupesDialog() {
+  _dGroups   = findDuplicates();
+  _dGroupIdx = -1;
+  _dRowIdx   = -1;
+  _dSortCol  = 't';
+  _dSortDesc = false;
+
+  _dSummary();
+  if (!_dTableInited) { _dInitTable(); _dTableInited = true; }
+  _dRenderGroups();
+  // Reset sort arrows
+  document.querySelectorAll('.dupes-th .th-lbl').forEach(l => {
+    l.textContent = l.textContent.replace(/ [↑↓]$/, '');
+  });
+  if (_dGroups.length > 0) _dSelectGroup(0);
+  else _dRenderTable([]);
+  _dUpdateBtns();
+
+  const dlg = document.getElementById("dupes-dlg");
+  dlg.style.position = ""; dlg.style.left = ""; dlg.style.top = "";
+  raiseOverlay(dupesOverlay);
+}
+dupesOverlay.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDupesDialog(); });
+
+// ── Delete folder ─────────────────────────────────────────────────────────
+function collectSubtreeIds(folderId) {
+  const ids = new Set();
+  const visit = (id) => {
+    ids.add(id);
+    allNodes.filter(n => n.parent === id).forEach(n => visit(n.id));
+  };
+  visit(folderId);
+  return ids;
+}
+
+function removeSubtreeFromState(ids) {
+  for (let i = allNodes.length - 1; i >= 0; i--) {
+    if (ids.has(allNodes[i].id)) allNodes.splice(i, 1);
+  }
+  allFolders = allNodes.filter(n => n.kind === "folder");
+}
+
+function deleteFolder(node) {
+  const ids     = collectSubtreeIds(node.id);
+  const total   = ids.size - 1;   // exclude the folder itself
+  const detail  = total > 0 ? ` и всё содержимое (${total} эл.)` : "";
+  deleteConfirm(`Удалить папку «${node.title}»${detail}?`, async () => {
+    const nextEl = findNextAfterDelete(node.id);
+
+    await invoke("delete_folder", { id: node.id }).catch(console.error);
+
+    removeSubtreeFromState(ids);
+
+    // Surgical: remove folder wrapper (takes tree-children with it)
+    treeEl.querySelector(`.tree-item[data-id="${node.id}"]`)?.parentElement?.remove();
+
+    // Clear grid/detail if they showed something deleted
+    if (ids.has(activeFolderId)) {
+      activeFolderId = null;
+      gridEl.innerHTML = "";
+      emptyHint.classList.remove("hidden");
+    }
+    if (ids.has(activeBookmarkNode?.id)) {
+      activeBookmarkNode = null;
+      hideDetailView();
+    }
+
+    // Navigate to next/prev item
+    if (nextEl) {
+      const nextNode = allNodes.find(n => n.id === parseInt(nextEl.dataset.id));
+      if (nextNode) {
+        nextEl.scrollIntoView({ block: "nearest" });
+        if (nextNode.kind === "folder") selectFolder(nextNode.id);
+        else selectTreeBookmark(nextNode);
+      }
+    } else if (node.parent != null) {
+      selectFolder(node.parent);
+    }
+  });
+}
+
+// ── Sort folder ───────────────────────────────────────────────────────────
+async function sortFolder(folderNode, by, desc) {
+  try {
+    const newOrder = await invoke("sort_folder", { folderId: folderNode.id, by, desc });
+
+    // Reorder tree children without re-rendering
+    const folderItem = treeEl.querySelector(`.tree-item[data-id="${folderNode.id}"]`);
+    const childrenEl = folderItem?.parentElement?.querySelector(":scope > .tree-children");
+    if (childrenEl) {
+      const orderMap = new Map(newOrder.map((id, idx) => [String(id), idx]));
+      const wrappers = [...childrenEl.children];
+      wrappers.sort((a, b) => {
+        const ia = a.querySelector(".tree-item")?.dataset.id || "";
+        const ib = b.querySelector(".tree-item")?.dataset.id || "";
+        return (orderMap.get(ia) ?? 9999) - (orderMap.get(ib) ?? 9999);
+      });
+      wrappers.forEach(w => childrenEl.appendChild(w));
+    }
+
+    // Reload grid if this folder is shown
+    if (activeFolderId === folderNode.id) loadBookmarks(folderNode.id);
+  } catch (err) { console.error("sort_folder:", err); }
+}
+
+// ── Folder context menu ───────────────────────────────────────────────────
+// Opens a nested float submenu from an item already inside a float submenu.
+function wireNestedFloat(trigger, buildFn) {
+  let nestedEl = null;
+  let nestedTimer = null;
+
+  function openNested() {
+    clearTimeout(nestedTimer);
+    if (nestedEl) return;
+    nestedEl = buildFn();
+    nestedEl.style.cssText =
+      "position:fixed;display:block;z-index:1002;background:#fff;" +
+      "border:1px solid #ababab;box-shadow:2px 3px 8px rgba(0,0,0,.22);" +
+      "padding:2px 0;min-width:170px;font-family:Segoe UI,system-ui,sans-serif;" +
+      "font-size:12px;color:#000;user-select:none;";
+    document.body.appendChild(nestedEl);
+
+    const tr = trigger.getBoundingClientRect();
+    const pr = trigger.closest("[style*='position:fixed']")?.getBoundingClientRect() || tr;
+    let left = pr.right - 1, top = tr.top;
+    const sw = nestedEl.offsetWidth, sh = nestedEl.offsetHeight;
+    if (left + sw > window.innerWidth  - 4) left = pr.left - sw + 1;
+    if (top  + sh > window.innerHeight - 4) top  = window.innerHeight - sh - 4;
+    nestedEl.style.left = left + "px";
+    nestedEl.style.top  = top  + "px";
+    trigger.classList.add("sub-open");
+
+    nestedEl.addEventListener("mouseenter", () => clearTimeout(nestedTimer));
+    nestedEl.addEventListener("mouseleave", closeNested);
+  }
+
+  function closeNested() {
+    nestedTimer = setTimeout(() => {
+      nestedEl?.remove(); nestedEl = null;
+      trigger.classList.remove("sub-open");
+    }, 140);
+  }
+
+  trigger.addEventListener("mouseenter", openNested);
+  trigger.addEventListener("mouseleave", (e) => {
+    if (nestedEl?.contains(e.relatedTarget)) { clearTimeout(nestedTimer); return; }
+    closeNested();
+  });
+
+  // Cleanup when parent float closes
+  return () => { nestedEl?.remove(); nestedEl = null; };
+}
+
+function buildExportSubmenu(folderNode) {
+  const sub = document.createElement("div");
+  sub.className = "ctx-submenu";
+
+  const doExport = (cmd, withImages) => {
+    hideContextMenu();
+    const args = { folderId: folderNode.id };
+    if (withImages !== undefined) args.withImages = withImages;
+    invoke(cmd, args).catch(err => { if (err !== "Отменено") console.error(err); });
+  };
+
+  sub.appendChild(ctxItem("import", "HTML файл",       null, () => doExport("export_folder_html")));
+  sub.appendChild(ctxItem("props",  "Текстовый файл",  null, () => doExport("export_folder_txt")));
+  sub.appendChild(ctxSep());
+
+  // "Файл синхронизации" with nested submenu
+  const syncEl = ctxItem("backup", "Файл синхронизации", null, null, false);
+  syncEl.classList.add("ctx-has-sub");
+  const syncArrow = document.createElement("span");
+  syncArrow.className = "ctx-arrow";
+  syncArrow.textContent = "▶";
+  syncEl.appendChild(syncArrow);
+
+  wireNestedFloat(syncEl, () => {
+    const n = document.createElement("div");
+    n.className = "ctx-submenu";
+    n.appendChild(ctxItem("image",  "С рисунками",   null, () => doExport("export_folder_sync", true)));
+    n.appendChild(ctxItem("delimg", "Без рисунков",  null, () => doExport("export_folder_sync", false)));
+    return n;
+  });
+  sub.appendChild(syncEl);
+
+  return sub;
+}
+
+// Generic: wires a float submenu from a main context menu trigger.
+function wireMainContextFloat(trigger, buildSubFn) {
+  const FLOAT_CSS =
+    "position:fixed;display:block;z-index:1000;background:#fff;" +
+    "border:1px solid #ababab;box-shadow:2px 3px 8px rgba(0,0,0,.22);" +
+    "padding:2px 0;min-width:210px;" +
+    "font-family:Segoe UI,system-ui,sans-serif;" +
+    "font-size:12px;color:#000;user-select:none;";
+
+  trigger.addEventListener("mouseenter", () => {
+    clearTimeout(_subTimer);
+    if (_subTrigger === trigger) return;
+    if (_subEl) { _subEl.remove(); _subEl = null; }
+    if (_subTrigger) _subTrigger.classList.remove("sub-open");
+    _subTrigger = trigger;
+    trigger.classList.add("sub-open");
+
+    const sub = buildSubFn();
+    sub.style.cssText = FLOAT_CSS;
+    document.body.appendChild(sub);
+    _subEl = sub;
+
+    const mr = ctxMenuEl.getBoundingClientRect();
+    const tr = trigger.getBoundingClientRect();
+    const sw = sub.offsetWidth, sh = sub.offsetHeight;
+    let left = mr.right - 1, top = tr.top;
+    if (left + sw > window.innerWidth  - 4) left = mr.left - sw + 1;
+    if (top  + sh > window.innerHeight - 4) top  = window.innerHeight - sh - 4;
+    sub.style.left = left + "px";
+    sub.style.top  = top  + "px";
+
+    sub.addEventListener("mouseenter", () => clearTimeout(_subTimer));
+    sub.addEventListener("mouseleave", scheduleSubClose);
+  });
+  trigger.addEventListener("mouseleave", (e) => {
+    if (_subEl?.contains(e.relatedTarget)) { clearTimeout(_subTimer); return; }
+    scheduleSubClose();
+  });
+}
+
+function buildSortSubmenu(folderNode) {
+  const sub = document.createElement("div");
+  sub.className = "ctx-submenu";
+  const S = (label, by, desc) =>
+    ctxItem(null, label, null, () => { hideContextMenu(); sortFolder(folderNode, by, desc); });
+  sub.appendChild(S("По имени",                          "title",   false));
+  sub.appendChild(S("По имени (обратный порядок)",        "title",   true));
+  sub.appendChild(ctxSep());
+  sub.appendChild(S("По дате добавления",                 "created", false));
+  sub.appendChild(S("По дате добавления (обратный)",      "created", true));
+  sub.appendChild(ctxSep());
+  sub.appendChild(S("По URL",                             "url",     false));
+  sub.appendChild(S("По URL (обратный порядок)",          "url",     true));
+  return sub;
+}
+
+function addSubTrigger(label, icon) {
+  const el = ctxItem(icon, label, null, null, false);
+  el.classList.add("ctx-has-sub");
+  const arrow = document.createElement("span");
+  arrow.className = "ctx-arrow";
+  arrow.textContent = "▶";
+  el.appendChild(arrow);
+  return el;
+}
+
+function showFolderContextMenu(e, folderNode) {
+  e.preventDefault();
+  e.stopPropagation();
+  closeSubFloat();
+  ctxMenuEl.innerHTML = "";
+
+  const expEl  = addSubTrigger("Экспорт",    "import");
+  const sortEl = addSubTrigger("Сортировка", "sort");
+
+  wireMainContextFloat(expEl,  () => buildExportSubmenu(folderNode));
+  wireMainContextFloat(sortEl, () => buildSortSubmenu(folderNode));
+
+  ctxMenuEl.appendChild(expEl);
+  ctxMenuEl.appendChild(ctxSep());
+  ctxMenuEl.appendChild(sortEl);
+  ctxMenuEl.appendChild(ctxSep());
+  ctxMenuEl.appendChild(ctxItem("verify", "Проверить", null, () => {
+    hideContextMenu();
+    openCheckerPanel(folderNode);
+  }));
+  ctxMenuEl.appendChild(ctxItem("props", "Свойства", "F4", () => {
+    hideContextMenu();
+    openFolderPropsDialog(folderNode);
+  }));
+  ctxMenuEl.appendChild(ctxItem("edit", "Переименовать", "F2", () => {
+    hideContextMenu();
+    startInlineRename(folderNode.id);
+  }));
+  ctxMenuEl.appendChild(ctxSep());
+  ctxMenuEl.appendChild(ctxItem("trash", "Удалить", "Del", () => {
+    hideContextMenu();
+    deleteFolder(folderNode);
+  }));
+
+  // Close float when hovering items without sub
+  ctxMenuEl.querySelectorAll(".ctx-item:not(.ctx-has-sub)").forEach(it => {
+    it.addEventListener("mouseenter", () => { clearTimeout(_subTimer); closeSubFloat(); });
+  });
+
+  ctxMenuEl.classList.remove("hidden");
+  const mw = ctxMenuEl.offsetWidth, mh = ctxMenuEl.offsetHeight;
+  ctxMenuEl.style.left = Math.min(e.clientX, window.innerWidth  - mw - 4) + "px";
+  ctxMenuEl.style.top  = Math.min(e.clientY, window.innerHeight - mh - 4) + "px";
+}
+
+// ── Thumb operations ─────────────────────────────────────────────────────
+let _isRefreshing = false;
+const detailLoadingOverlay = document.getElementById("detail-loading-overlay");
+
+async function refreshThumb(node) {
+  if (!node.url || _isRefreshing) return;
+  _isRefreshing = true;
+
+  // Switch to detail view so the overlay is visible
+  if (activeBookmarkNode?.id !== node.id) {
+    showDetailView(node);
+    await new Promise(r => setTimeout(r, 40));
+  }
+
+  detailLoadingOverlay.classList.add("visible");
+
+  try {
+    const newPath = await invoke("refresh_thumb", { id: node.id, url: node.url });
+
+    // Update state
+    const n = allNodes.find(n => n.id === node.id);
+    if (n) n.thumb = newPath;
+    if (activeBookmarkNode?.id === node.id) activeBookmarkNode.thumb = newPath;
+
+    // Update detail image (cache-bust)
+    const src = convertFileSrc(newPath) + "?t=" + Date.now();
+    detailImgEl.src            = src;
+    detailImgEl.style.display  = "";
+    detailNoImgEl.style.display = "none";
+    detailImgEl.onerror = () => {};   // suppress stale error handlers
+
+    // Update grid card if visible
+    const card = gridEl.querySelector(`.card[data-id="${node.id}"]`);
+    if (card) {
+      card.dataset.thumb = newPath;
+      const thumbDiv = card.querySelector(".card-thumb");
+      if (thumbDiv) {
+        let img = thumbDiv.querySelector("img");
+        if (img) {
+          img.src = src;
+        } else {
+          thumbDiv.innerHTML = "";
+          img = document.createElement("img");
+          img.src = src; img.alt = "";
+          img.onerror = () => { img.remove(); thumbDiv.appendChild(makeNoImg(node.title)); };
+          thumbDiv.appendChild(img);
+        }
+      }
+    }
+  } catch (err) {
+    console.error("refresh_thumb:", err);
+  } finally {
+    detailLoadingOverlay.classList.remove("visible");
+    _isRefreshing = false;
+  }
+}
+
+async function clearThumb(node) {
+  await invoke("clear_thumb", { id: node.id }).catch(console.error);
+  const n = allNodes.find(n => n.id === node.id);
+  if (n) n.thumb = null;
+
+  // Update grid card
+  const card = gridEl.querySelector(`.card[data-id="${node.id}"]`);
+  if (card) {
+    const t = card.querySelector(".card-thumb");
+    if (t) { t.innerHTML = ""; t.appendChild(makeNoImg(node.title)); }
+  }
+
+  // Update detail view
+  if (activeBookmarkNode?.id === node.id) {
+    activeBookmarkNode.thumb = null;
+    detailImgEl.style.display  = "none";
+    detailNoImgEl.style.display = "";
+    setNoImgPlaceholder({ ...node, thumb: null });
+  }
+}
+
+// ── Confirm dialog ────────────────────────────────────────────────────────
+const confirmOverlay = document.getElementById("confirm-overlay");
+const confirmMsg     = document.getElementById("confirm-msg");
+let   _confirmCb     = null;
+
+// Bring any overlay to the DOM front (correct stacking when multiple overlays are open)
+function raiseOverlay(el) {
+  document.body.appendChild(el);
+  el.classList.remove("hidden");
+}
+
+function showConfirm(msg, onOk) {
+  confirmMsg.textContent = msg;
+  _confirmCb = onOk;
+  raiseOverlay(confirmOverlay); // confirm must be above ALL other dialogs
+  setTimeout(() => document.getElementById("confirm-ok")?.focus(), 20);
+}
+function deleteConfirm(msg, onOk) {
+  if (!appSettings.confirmDelete) { onOk(); return; }
+  showConfirm(msg, onOk);
+}
+function closeConfirm() { confirmOverlay.classList.add("hidden"); _confirmCb = null; }
+
+document.getElementById("confirm-x").onclick      = closeConfirm;
+document.getElementById("confirm-cancel").onclick  = closeConfirm;
+document.getElementById("confirm-ok").onclick      = () => { const cb = _confirmCb; closeConfirm(); cb?.(); };
+confirmOverlay.addEventListener("click", (e) => { if (e.target === confirmOverlay) closeConfirm(); });
+
+// ── Delete bookmark ───────────────────────────────────────────────────────
+// Returns all currently visible (not inside closed branch) tree items.
+function getVisibleTreeItems() {
+  return [...treeEl.querySelectorAll(".tree-item")].filter(el => {
+    let p = el.parentElement;
+    while (p && p !== treeEl) {
+      if (p.classList.contains("tree-children") && !p.classList.contains("open")) return false;
+      p = p.parentElement;
+    }
+    return true;
+  });
+}
+
+// Finds the best item to select after deleting deletedId.
+function findNextAfterDelete(deletedId) {
+  const items = getVisibleTreeItems();
+  const idx   = items.findIndex(el => el.dataset.id === String(deletedId));
+  if (idx < 0) return null;
+  if (idx + 1 < items.length) return items[idx + 1];  // next down
+  if (idx - 1 >= 0)           return items[idx - 1];  // previous up
+  return null;
+}
+
+// Updates the count badge on a folder after one bookmark is removed.
+function decrementFolderBadge(parentId) {
+  if (parentId == null) return;
+  const pNode = allNodes.find(n => n.id === parentId && n.kind === "folder");
+  if (!pNode || pNode.count <= 0) return;
+  pNode.count--;
+  const folderItem = treeEl.querySelector(`.tree-item[data-id="${parentId}"]`);
+  const badge = folderItem?.querySelector(".tree-count");
+  if (!badge) return;
+  if (pNode.count > 0) badge.textContent = pNode.count;
+  else badge.remove();
+}
+
+function deleteBookmark(node) {
+  deleteConfirm(`Удалить «${node.title}»?`, async () => {
+    // Capture next item BEFORE DOM changes
+    const nextEl = findNextAfterDelete(node.id);
+
+    await invoke("delete_node", { id: node.id }).catch(console.error);
+
+    // Update in-memory state
+    const idx = allNodes.findIndex(n => n.id === node.id);
+    if (idx >= 0) allNodes.splice(idx, 1);
+    allFolders = allNodes.filter(n => n.kind === "folder");
+
+    // Surgical DOM update — no renderTree(), no collapse
+    decrementFolderBadge(node.parent);
+    treeEl.querySelector(`.tree-item[data-id="${node.id}"]`)?.parentElement?.remove();
+    gridEl.querySelector(`.card[data-id="${node.id}"]`)?.remove();
+
+    // If grid now empty, show hint
+    if (activeFolderId === node.parent && gridEl.children.length === 0) {
+      emptyHint.classList.remove("hidden");
+    }
+
+    // If detail view was showing this node, clear it
+    if (activeBookmarkNode?.id === node.id) {
+      activeBookmarkNode = null;
+      hideDetailView();
+    }
+
+    // Navigate to next/prev item
+    if (nextEl) {
+      const nextNode = allNodes.find(n => n.id === parseInt(nextEl.dataset.id));
+      if (!nextNode) return;
+      nextEl.scrollIntoView({ block: "nearest" });
+      if (nextNode.kind === "folder") selectFolder(nextNode.id);
+      else selectTreeBookmark(nextNode);
+    } else if (node.parent != null) {
+      // Nothing left — go to parent folder
+      selectFolder(node.parent);
+    }
+  });
+}
+
+// ── Draggable dialog helper ────────────────────────────────────────────────
+function makeDlgDraggable(dlgEl, handleEl) {
+  let drag = { on: false, ox: 0, oy: 0 };
+  handleEl.addEventListener("mousedown", (e) => {
+    if (e.target.closest("button")) return;
+    const r = dlgEl.getBoundingClientRect();
+    dlgEl.style.position = "fixed";
+    dlgEl.style.margin   = "0";
+    dlgEl.style.left     = r.left + "px";
+    dlgEl.style.top      = r.top  + "px";
+    drag = { on: true, ox: e.clientX - r.left, oy: e.clientY - r.top };
+    e.preventDefault();
+  });
+  document.addEventListener("mousemove", (e) => {
+    if (!drag.on) return;
+    const w = dlgEl.offsetWidth, h = dlgEl.offsetHeight;
+    dlgEl.style.left = Math.max(0, Math.min(window.innerWidth  - w, e.clientX - drag.ox)) + "px";
+    dlgEl.style.top  = Math.max(0, Math.min(window.innerHeight - h, e.clientY - drag.oy)) + "px";
+  });
+  document.addEventListener("mouseup", () => { drag.on = false; });
+}
+
+function parseUADate(s) {
+  if (!s || s.length < 12) return "—";
+  return `${s.slice(0,2)}.${s.slice(2,4)}.20${s.slice(4,6)} ${s.slice(6,8)}:${s.slice(8,10)}:${s.slice(10,12)}`;
+}
+
+// ── Link properties dialog ─────────────────────────────────────────────────
+const propsOverlay = document.getElementById("props-overlay");
+const propsTitle   = document.getElementById("props-title");
+const propsUrl     = document.getElementById("props-url");
+const propsNote    = document.getElementById("props-note");
+let   propsNode    = null;
+
+makeDlgDraggable(document.getElementById("props-dlg"), document.querySelector("#props-dlg .props-drag-handle"));
+
+function openPropsDialog(node) {
+  propsNode        = node;
+  propsTitle.value = node.title || "";
+  propsUrl.value   = node.url   || "";
+  propsNote.value  = node.note  || "";
+  document.getElementById("props-id").textContent      = node.id;
+  document.getElementById("props-created").textContent  = parseUADate(node.created);
+  document.getElementById("props-visited").textContent  = parseUADate(node.visited);
+  const thumbEl = document.getElementById("props-thumb");
+  thumbEl.textContent = node.thumb || "—";
+  thumbEl.title       = node.thumb || "";
+  // Reset drag position
+  const dlg = document.getElementById("props-dlg");
+  dlg.style.position = ""; dlg.style.left = ""; dlg.style.top = ""; dlg.style.margin = "";
+  raiseOverlay(propsOverlay);
+  setTimeout(() => propsTitle.focus(), 30);
+}
+
+function closePropsDialog() { propsOverlay.classList.add("hidden"); propsNode = null; }
+
+async function savePropsDialog() {
+  if (!propsNode) return false;
+  const title = propsTitle.value.trim();
+  const url   = propsUrl.value.trim();
+  const note  = propsNote.value;
+  if (!title) { propsTitle.focus(); return false; }
+  await invoke("update_bookmark", { id: propsNode.id, title, url, note }).catch(console.error);
+  const n = allNodes.find(n => n.id === propsNode.id);
+  if (n) Object.assign(n, { title, url, note });
+  const ti = treeEl.querySelector(`.tree-item[data-id="${propsNode.id}"] .label`);
+  if (ti) ti.textContent = title;
+  const card = gridEl.querySelector(`.card[data-id="${propsNode.id}"]`);
+  if (card) {
+    const ct = card.querySelector(".card-title"), cu = card.querySelector(".card-url");
+    if (ct) ct.textContent = title;
+    if (cu) { cu.textContent = url; cu.title = url; }
+    card.dataset.url = url;
+  }
+  if (activeBookmarkNode?.id === propsNode.id) {
+    Object.assign(activeBookmarkNode, { title, url, note });
+    detailUrlEl.textContent = url; detailUrlEl.title = url;
+    detailNoteEl.textContent = note;
+    breadcrumb.textContent = (propsNode.parent != null ? buildBreadcrumbText(propsNode.parent) + "  /  " : "") + title;
+  }
+  return true;
+}
+
+document.getElementById("props-x").onclick      = closePropsDialog;
+document.getElementById("props-cancel").onclick  = closePropsDialog;
+document.getElementById("props-apply").onclick   = () => savePropsDialog();
+document.getElementById("props-ok").onclick      = async () => { if (await savePropsDialog()) closePropsDialog(); };
+propsOverlay.addEventListener("click", (e) => { if (e.target === propsOverlay) closePropsDialog(); });
+propsOverlay.addEventListener("keydown", (e) => {
+  if (e.key === "Enter")  document.getElementById("props-ok").click();
+  if (e.key === "Escape") closePropsDialog();
+});
+
+// ── Folder properties dialog ───────────────────────────────────────────────
+const fpropsOverlay = document.getElementById("fprops-overlay");
+const fpropsTitle   = document.getElementById("fprops-title");
+let   fpropsNode    = null;
+
+makeDlgDraggable(document.getElementById("fprops-dlg"), document.querySelector("#fprops-dlg .props-drag-handle"));
+
+function getFolderStats(folderId) {
+  let links = 0, folders = 0;
+  const visit = (id) => {
+    allNodes.filter(n => n.parent === id).forEach(n => {
+      if (n.kind === "bookmark") links++;
+      else { folders++; visit(n.id); }
+    });
+  };
+  visit(folderId);
+  return { links, folders };
+}
+
+function openFolderPropsDialog(node) {
+  fpropsNode        = node;
+  fpropsTitle.value = node.title || "";
+  const stats = getFolderStats(node.id);
+  document.getElementById("fprops-links").textContent   = stats.links;
+  document.getElementById("fprops-folders").textContent = stats.folders;
+  document.getElementById("fprops-path").textContent    = getFolderPath(node.id) || node.title;
+  document.getElementById("fprops-created").textContent = parseUADate(node.created);
+  document.getElementById("fprops-id").textContent      = node.id;
+  const dlg = document.getElementById("fprops-dlg");
+  dlg.style.position = ""; dlg.style.left = ""; dlg.style.top = ""; dlg.style.margin = "";
+  raiseOverlay(fpropsOverlay);
+  setTimeout(() => fpropsTitle.focus(), 30);
+}
+
+function closeFolderPropsDialog() { fpropsOverlay.classList.add("hidden"); fpropsNode = null; }
+
+async function saveFolderPropsDialog() {
+  if (!fpropsNode) return false;
+  const title = fpropsTitle.value.trim();
+  if (!title) { fpropsTitle.focus(); return false; }
+  await invoke("rename_node", { id: fpropsNode.id, title }).catch(console.error);
+  const n = allNodes.find(n => n.id === fpropsNode.id);
+  if (n) n.title = title;
+  allFolders = allNodes.filter(n => n.kind === "folder");
+  const ti = treeEl.querySelector(`.tree-item[data-id="${fpropsNode.id}"] .label`);
+  if (ti) ti.textContent = title;
+  return true;
+}
+
+document.getElementById("fprops-x").onclick      = closeFolderPropsDialog;
+document.getElementById("fprops-cancel").onclick  = closeFolderPropsDialog;
+document.getElementById("fprops-apply").onclick   = () => saveFolderPropsDialog();
+document.getElementById("fprops-ok").onclick      = async () => { if (await saveFolderPropsDialog()) closeFolderPropsDialog(); };
+fpropsOverlay.addEventListener("click", (e) => { if (e.target === fpropsOverlay) closeFolderPropsDialog(); });
+fpropsOverlay.addEventListener("keydown", (e) => {
+  if (e.key === "Enter")  document.getElementById("fprops-ok").click();
+  if (e.key === "Escape") closeFolderPropsDialog();
+});
+
+// ── Active link helper ────────────────────────────────────────────────────
+function getActiveLink() {
+  return activeBookmarkNode
+    || allNodes.find(n => String(n.id) === gridEl.querySelector(".card.selected")?.dataset.id);
+}
+
+// ── Browser list ─────────────────────────────────────────────────────────
+let browsers        = [{ name: "Браузер по умолчанию", path: "default" }];
+let defaultBrowserPath = "default";
+
+// File-based portable storage for browser list
+async function loadBrowsersConfig() {
+  try {
+    const json = await invoke('load_browsers_config');
+    if (json) {
+      const data = JSON.parse(json);
+      if (Array.isArray(data.browsers) && data.browsers.length) browsers = data.browsers;
+      if (data.default) defaultBrowserPath = data.default;
+      return;
+    }
+  } catch(e) { /* file not yet created */ }
+  // Migrate from localStorage if exists
+  try {
+    const s = localStorage.getItem("ua_browsers");
+    if (s) {
+      const parsed = JSON.parse(s);
+      if (Array.isArray(parsed) && parsed.length) {
+        browsers = parsed;
+        defaultBrowserPath = localStorage.getItem("ua_default_browser") || "default";
+        await saveBrowsersConfig();
+        localStorage.removeItem("ua_browsers");
+        localStorage.removeItem("ua_default_browser");
+      }
+    }
+  } catch(e) {}
+}
+
+async function saveBrowsersConfig() {
+  try {
+    await invoke('save_browsers_config', {
+      json: JSON.stringify({ browsers, default: defaultBrowserPath })
+    });
+  } catch(e) { console.error('saveBrowsersConfig:', e); }
+}
+
+function saveBrowsers() { saveBrowsersConfig(); }
+function getDefaultBrowserPath() { return defaultBrowserPath; }
+function setDefaultBrowserPath(p) { defaultBrowserPath = p; saveBrowsersConfig(); }
+
+function openWithBrowser(url, path) {
+  invoke("open_url_with", { url, browser: path || "default" }).catch(console.error);
+}
+
+// ── Open With picker ─────────────────────────────────────────────────────
+(function () {
+  const overlay = document.getElementById("openwith-overlay");
+  const list    = document.getElementById("openwith-list");
+  let   _owUrl  = "", _owPath = "default";
+
+  window.showOpenWithDialog = function (url) {
+    if (!url) return;
+    if (browsers.length <= 1) { openWithBrowser(url, "default"); return; }
+    _owUrl = url; _owPath = browsers[0]?.path || "default";
+    list.innerHTML = "";
+    browsers.forEach((b, i) => {
+      const el = document.createElement("div");
+      el.className = "dlg-browser-entry" + (i === 0 ? " selected" : "");
+      el.textContent = b.name;
+      el.addEventListener("click", () => {
+        list.querySelectorAll(".dlg-browser-entry").forEach(e => e.classList.remove("selected"));
+        el.classList.add("selected"); _owPath = b.path;
+      });
+      el.addEventListener("dblclick", () => { openWithBrowser(_owUrl, b.path); overlay.classList.add("hidden"); });
+      list.appendChild(el);
+    });
+    raiseOverlay(overlay);
+  };
+
+  document.getElementById("openwith-x").onclick      = () => overlay.classList.add("hidden");
+  document.getElementById("openwith-cancel").onclick  = () => overlay.classList.add("hidden");
+  document.getElementById("openwith-ok").onclick      = () => { openWithBrowser(_owUrl, _owPath); overlay.classList.add("hidden"); };
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.classList.add("hidden"); });
+})();
+
+// ── Context menu ─────────────────────────────────────────────────────────
+let ctxTarget = null;
+const ctxMenuEl = document.getElementById("ctx-menu");
+
+function ctxItem(icon, label, shortcut, action, disabled) {
+  const el  = document.createElement("div");
+  el.className = "ctx-item" + (disabled ? " ctx-disabled" : "");
+
+  const ic = document.createElement("span");
+  ic.className = "ctx-icon";
+  ic.innerHTML = ICONS[icon] || "";
+
+  const tx = document.createElement("span");
+  tx.className = "ctx-text";
+  tx.textContent = label;
+
+  el.append(ic, tx);
+
+  if (shortcut) {
+    const sc = document.createElement("span");
+    sc.className = "ctx-shortcut";
+    sc.textContent = shortcut;
+    el.appendChild(sc);
+  }
+
+  if (!disabled && action) {
+    el.addEventListener("click", () => { hideContextMenu(); action(); });
+  }
+  return el;
+}
+
+function ctxSep() {
+  const el = document.createElement("div");
+  el.className = "ctx-sep";
+  return el;
+}
+
+// ── Floating submenu (appended to body, position:fixed) ──────────────────
+let _subTimer   = null;
+let _subTrigger = null;   // the .ctx-has-sub element currently active
+let _subEl      = null;   // the floating submenu div in document.body
+
+function closeSubFloat() {
+  clearTimeout(_subTimer);
+  if (_subEl)      { _subEl.remove(); _subEl = null; }
+  if (_subTrigger) { _subTrigger.classList.remove("sub-open"); _subTrigger = null; }
+}
+
+function scheduleSubClose() {
+  _subTimer = setTimeout(closeSubFloat, 160);
+}
+
+function openSubFloat(trigger, node) {
+  clearTimeout(_subTimer);
+  if (_subTrigger === trigger) return;   // already open for this trigger
+
+  // Close previous
+  if (_subEl) { _subEl.remove(); _subEl = null; }
+  if (_subTrigger) _subTrigger.classList.remove("sub-open");
+
+  _subTrigger = trigger;
+  trigger.classList.add("sub-open");
+
+  // Build submenu items
+  const sub = document.createElement("div");
+  sub.className = "ctx-submenu";
+  browsers.forEach(b => {
+    const it = ctxItem("openwith", b.name, null,
+      () => { hideContextMenu(); openWithBrowser(node.url, b.path); });
+    sub.appendChild(it);
+  });
+  sub.appendChild(ctxSep());
+  sub.appendChild(ctxItem("gear", "Список браузеров...", null,
+    () => { hideContextMenu(); openBrowsersDialog(); }));
+
+  // Fixed positioning — no parent stacking context issues
+  sub.style.position = "fixed";
+  sub.style.display  = "block";
+  sub.style.zIndex   = "1000";
+  document.body.appendChild(sub);
+  _subEl = sub;
+
+  // Calculate position from menu and trigger rects
+  const menuR = ctxMenuEl.getBoundingClientRect();
+  const trigR = trigger.getBoundingClientRect();
+  const sw    = sub.offsetWidth;
+  const sh    = sub.offsetHeight;
+
+  let left = menuR.right - 1;           // flush against menu right edge
+  let top  = trigR.top;
+
+  if (left + sw > window.innerWidth  - 4) left = menuR.left - sw + 1;
+  if (top  + sh > window.innerHeight - 4) top  = window.innerHeight - sh - 4;
+
+  sub.style.left = left + "px";
+  sub.style.top  = top  + "px";
+
+  // Keep submenu alive while mouse is over it
+  sub.addEventListener("mouseenter", () => clearTimeout(_subTimer));
+  sub.addEventListener("mouseleave", scheduleSubClose);
+}
+
+function wireSubFloat(trigger, node) {
+  trigger.addEventListener("mouseenter", () => openSubFloat(trigger, node));
+  trigger.addEventListener("mouseleave", (e) => {
+    // If moving directly into the floating submenu — don't close
+    if (_subEl && _subEl.contains(e.relatedTarget)) {
+      clearTimeout(_subTimer);
+      return;
+    }
+    scheduleSubClose();
+  });
+}
+
+function showContextMenu(e, node) {
+  e.preventDefault();
+  e.stopPropagation();
+  ctxTarget = node;
+  closeSubFloat();
+  ctxMenuEl.innerHTML = "";
+
+  const hasThumb = !!node.thumb;
+
+  ctxMenuEl.appendChild(
+    ctxItem("link", "Открыть", null,
+      () => openWithBrowser(node.url, getDefaultBrowserPath()))
+  );
+
+  // "Открыть с помощью" — NO submenu child; float created on hover
+  const owEl = ctxItem("openwith", "Открыть с помощью", null, null, false);
+  owEl.classList.add("ctx-has-sub");
+  const arrow = document.createElement("span");
+  arrow.className = "ctx-arrow";
+  arrow.textContent = "▶";
+  owEl.appendChild(arrow);
+  wireSubFloat(owEl, node);     // wire float submenu
+  ctxMenuEl.appendChild(owEl);
+
+  ctxMenuEl.appendChild(ctxSep());
+
+  ctxMenuEl.appendChild(
+    ctxItem("image",   "Открыть рисунок",  "F12",
+      () => invoke("open_url", { url: node.thumb }), !hasThumb)
+  );
+  ctxMenuEl.appendChild(
+    ctxItem("refresh", "Обновить рисунок", null,
+      () => refreshThumb(node), !node.url)   // active whenever there's a URL
+  );
+  ctxMenuEl.appendChild(
+    ctxItem("delimg",  "Удалить рисунок",  null,
+      () => clearThumb(node), !hasThumb)     // active only if thumb exists
+  );
+
+  ctxMenuEl.appendChild(ctxSep());
+
+  ctxMenuEl.appendChild(ctxItem("verify", "Проверить", "F10", null, true));
+  ctxMenuEl.appendChild(ctxItem("trash",  "Удалить ссылку", "Del",
+    () => deleteBookmark(node)));
+
+  ctxMenuEl.appendChild(ctxSep());
+
+  ctxMenuEl.appendChild(
+    ctxItem("copy", "Копировать URL", "Ctrl+C",
+      () => navigator.clipboard.writeText(node.url || "").catch(() => {}))
+  );
+  ctxMenuEl.appendChild(ctxItem("props", "Свойства", "F4",
+    () => { hideContextMenu(); openPropsDialog(node); }));
+
+  // Other items: close float submenu on hover
+  ctxMenuEl.querySelectorAll(".ctx-item:not(.ctx-has-sub)").forEach(it => {
+    it.addEventListener("mouseenter", () => {
+      clearTimeout(_subTimer);
+      closeSubFloat();
+    });
+  });
+
+  // Position: avoid viewport overflow
+  ctxMenuEl.classList.remove("hidden");
+  const mw = ctxMenuEl.offsetWidth, mh = ctxMenuEl.offsetHeight;
+  ctxMenuEl.style.left = Math.min(e.clientX, window.innerWidth  - mw - 4) + "px";
+  ctxMenuEl.style.top  = Math.min(e.clientY, window.innerHeight - mh - 4) + "px";
+}
+
+function hideContextMenu() {
+  closeSubFloat();
+  ctxMenuEl.classList.add("hidden");
+}
+
+// Capture phase: fires before ANY element's stopPropagation
+document.addEventListener("mousedown", (e) => {
+  if (ctxMenuEl.classList.contains("hidden")) return;
+  if (ctxMenuEl.contains(e.target))  return;  // click inside main menu
+  if (_subEl?.contains(e.target))    return;  // click inside float submenu
+  hideContextMenu();
+}, true);
+
+// Close on Escape (already handled elsewhere, but add safety)
+// Close on window losing focus (e.g. Alt+Tab)
+window.addEventListener("blur", () => {
+  if (!ctxMenuEl.classList.contains("hidden")) hideContextMenu();
+});
+
+// ── Browsers dialog ───────────────────────────────────────────────────────
+let dlgBrowsers = [];
+let dlgSelIdx   = -1;
+
+const browsersOverlay  = document.getElementById("browsers-overlay");
+const dlgBrowserList   = document.getElementById("dlg-browser-list");
+const dlgDefaultSel    = document.getElementById("dlg-default-sel");
+const dlgDelBtn        = document.getElementById("dlg-del");
+const dlgPropsBtn      = document.getElementById("dlg-props");
+
+// ── Browser import dialog ─────────────────────────────────────────────────────
+
+function browserIconSvg(id) {
+  const norm = (id || '').toLowerCase();
+  let cfg;
+  if (norm.startsWith('opera') || norm.includes('opera'))
+    cfg = norm.includes('gx') ? { bg: '#FF1B2D', letter: 'G' } : { bg: '#FF1B2D', letter: 'O' };
+  else cfg = {
+    chrome:   { bg: '#4285F4', letter: 'C' },
+    edge:     { bg: '#0078D4', letter: 'E' },
+    firefox:  { bg: '#FF7139', letter: 'F' },
+    brave:    { bg: '#FB542B', letter: 'B' },
+    vivaldi:  { bg: '#EF3939', letter: 'V' },
+    chromium: { bg: '#4285F4', letter: '⬡' },
+    waterfox: { bg: '#00AEF0', letter: 'W' },
+    librewolf:{ bg: '#00ACAC', letter: 'L' },
+  }[norm] || { bg: '#888', letter: '?' };
+  return `<svg width="18" height="18" viewBox="0 0 18 18"><circle cx="9" cy="9" r="9" fill="${cfg.bg}"/><text x="9" y="13.5" text-anchor="middle" fill="white" font-family="Arial,sans-serif" font-weight="700" font-size="11">${cfg.letter}</text></svg>`;
+}
+
+// ── Browser import dialog (full) ─────────────────────────────────────────────
+
+const biOverlay    = document.getElementById('browser-import-overlay');
+const biList       = document.getElementById('bi-list');
+const biStatus     = document.getElementById('bi-status');
+const biSelPathEl  = document.getElementById('bi-sel-path');
+const biOkBtn      = document.getElementById('bi-ok');
+
+let biDetected  = [];
+let biSelIdx    = -1;
+let biManual    = null; // { path, kind, name } — portable/manual selection
+
+function biReset() {
+  biSelIdx = -1; biManual = null;
+  biSelPathEl.textContent = '';
+  biStatus.textContent    = '';
+  biOkBtn.disabled        = true;
+  biList.querySelectorAll('.dlg-browser-entry').forEach(e => e.classList.remove('selected'));
+}
+
+document.getElementById('bi-x').addEventListener('click', () => biOverlay.classList.add('hidden'));
+document.getElementById('bi-cancel').addEventListener('click', () => biOverlay.classList.add('hidden'));
+biOkBtn.addEventListener('click', doBrowserImport);
+
+// "Файл закладок…" — pick Bookmarks / places.sqlite directly
+document.getElementById('bi-pick-file').addEventListener('click', async () => {
+  const path = await invoke('pick_bookmarks_file').catch(() => null);
+  if (!path) return;
+  biReset();
+  const fname  = path.split(/[\\/]/).pop();
+  const isFF   = fname.toLowerCase().endsWith('.sqlite');
+  const name   = guessNameFromBookmarksPath(path);
+  biManual     = { path, kind: isFF ? 'firefox' : 'chromium', name };
+  biSelPathEl.textContent = path;
+  biOkBtn.disabled = false;
+});
+
+// "Папку профиля…" — pick profile folder, auto-detect bookmarks inside
+document.getElementById('bi-pick-folder').addEventListener('click', async () => {
+  const folder = await invoke('pick_profile_folder').catch(() => null);
+  if (!folder) return;
+  biReset();
+  const found = await invoke('find_bookmarks_in_folder', { folder }).catch(() => null);
+  if (!found) {
+    biSelPathEl.textContent = '';
+    biStatus.textContent = 'Файл закладок не найден в выбранной папке.';
+    return;
+  }
+  const name = guessNameFromBookmarksPath(folder);
+  biManual   = { path: found.path, kind: found.kind, name };
+  biSelPathEl.textContent = found.path;
+  biOkBtn.disabled = false;
+});
+
+function guessNameFromBookmarksPath(path) {
+  // Walk path segments to find a recognizable browser name
+  const parts = path.replace(/\\/g, '/').split('/');
+  const known = {
+    'opera stable': 'Opera', 'opera gx stable': 'Opera GX',
+    'opera developer': 'Opera Developer', 'opera beta': 'Opera Beta',
+    'opera neon': 'Opera Neon',
+    'google': 'Chrome', 'chrome': 'Chrome',
+    'microsoft': 'Edge', 'edge': 'Edge',
+    'mozilla firefox': 'Firefox', 'waterfox': 'Waterfox',
+    'librewolf': 'LibreWolf', 'brave-browser': 'Brave', 'vivaldi': 'Vivaldi',
+  };
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const lc = parts[i].toLowerCase();
+    if (known[lc]) return known[lc];
+    // Check partial match
+    for (const [k, v] of Object.entries(known)) {
+      if (lc.includes(k) || k.includes(lc)) return v;
+    }
+  }
+  // Fallback: last non-generic directory name
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i];
+    if (p && !['default', 'user data', 'bookmarks', 'profiles'].includes(p.toLowerCase())) {
+      return p;
+    }
+  }
+  return 'Браузер';
+}
+
+async function openBrowserImportDialog() {
+  biReset();
+  biList.innerHTML = '<div style="padding:8px;color:#888;font-size:11px">Поиск браузеров…</div>';
+  raiseOverlay(biOverlay);
+
+  try { biDetected = await invoke('detect_browsers'); }
+  catch(e) { biDetected = []; }
+
+  biList.innerHTML = '';
+  if (!biDetected.length) {
+    biList.innerHTML = '<div style="padding:8px;color:#888;font-size:11px">Установленные браузеры не найдены.<br>Используйте кнопки ниже.</div>';
+    return;
+  }
+
+  biDetected.forEach((b, i) => {
+    const el = document.createElement('div');
+    el.className = 'dlg-browser-entry bi-entry';
+    el.innerHTML = `<span class="bi-icon">${browserIconSvg(b.id)}</span><span style="flex:1">${b.name}</span>`;
+    el.title = b.bookmarks_path || '';
+    el.addEventListener('click', () => {
+      biList.querySelectorAll('.dlg-browser-entry').forEach(e => e.classList.remove('selected'));
+      el.classList.add('selected');
+      biSelIdx = i; biManual = null;
+      biSelPathEl.textContent = '';
+      biStatus.textContent = '';
+      biOkBtn.disabled = false;
+    });
+    el.addEventListener('dblclick', () => { biSelIdx = i; biManual = null; doBrowserImport(); });
+    biList.appendChild(el);
+  });
+}
+
+async function doBrowserImport() {
+  biOkBtn.disabled = true;
+
+  if (biManual) {
+    // Portable / manual file mode
+    biStatus.textContent = `Импортирую из ${biManual.name}…`;
+    try {
+      const r = await invoke('import_from_bookmarks_file', {
+        path: biManual.path, name: biManual.name
+      });
+      biStatus.textContent = `Импортировано: ${r.links} ссылок, ${r.folders} папок.`;
+      refreshTree();
+      setTimeout(() => biOverlay.classList.add('hidden'), 2500);
+    } catch(e) {
+      biStatus.textContent = `Ошибка: ${e}`;
+      biOkBtn.disabled = false;
+    }
+    return;
+  }
+
+  if (biSelIdx < 0 || biSelIdx >= biDetected.length) { biOkBtn.disabled = false; return; }
+  const b = biDetected[biSelIdx];
+  biStatus.textContent = `Импортирую из ${b.name}…`;
+  try {
+    const r = await invoke('import_from_browser', { browserId: b.id });
+    biStatus.textContent = `Импортировано: ${r.links} ссылок, ${r.folders} папок.`;
+    refreshTree();
+    setTimeout(() => biOverlay.classList.add('hidden'), 2500);
+  } catch(e) {
+    biStatus.textContent = `Ошибка: ${e}`;
+    biOkBtn.disabled = false;
+  }
+}
+
+function openBrowsersDialog() {
+  dlgBrowsers = browsers.map(b => ({...b}));
+  dlgSelIdx = -1;
+  renderDlgList();
+  renderDlgDefault();
+  updateDlgBtns();
+  raiseOverlay(browsersOverlay);
+}
+
+function closeBrowsersDialog(save) {
+  if (save) {
+    browsers = dlgBrowsers;
+    defaultBrowserPath = dlgDefaultSel.value;
+    saveBrowsersConfig();
+  }
+  browsersOverlay.classList.add("hidden");
+}
+
+function renderDlgList() {
+  dlgBrowserList.innerHTML = "";
+  dlgBrowsers.forEach((b, i) => {
+    const el = document.createElement("div");
+    el.className = "dlg-browser-entry" + (i === dlgSelIdx ? " selected" : "");
+    el.textContent = b.name;
+    el.addEventListener("click", () => { dlgSelIdx = i; renderDlgList(); updateDlgBtns(); });
+    el.addEventListener("dblclick", () => openAddBrowserDialog(i));
+    dlgBrowserList.appendChild(el);
+  });
+}
+
+function renderDlgDefault() {
+  dlgDefaultSel.innerHTML = "";
+  dlgBrowsers.forEach(b => {
+    const opt = document.createElement("option");
+    opt.value = b.path; opt.textContent = b.name;
+    dlgDefaultSel.appendChild(opt);
+  });
+  dlgDefaultSel.value = getDefaultBrowserPath();
+}
+
+function updateDlgBtns() {
+  const isDefaultEntry = dlgSelIdx >= 0 && dlgBrowsers[dlgSelIdx]?.path === "default";
+  dlgDelBtn.disabled   = dlgSelIdx < 0 || isDefaultEntry;
+  dlgPropsBtn.disabled = dlgSelIdx < 0;
+}
+
+document.getElementById("dlg-x").onclick      = () => closeBrowsersDialog(false);
+document.getElementById("dlg-cancel").onclick  = () => closeBrowsersDialog(false);
+document.getElementById("dlg-ok").onclick      = () => closeBrowsersDialog(true);
+document.getElementById("dlg-add").onclick     = () => openAddBrowserDialog(-1);
+document.getElementById("dlg-del").onclick     = () => {
+  if (dlgSelIdx < 0) return;
+  dlgBrowsers.splice(dlgSelIdx, 1);
+  dlgSelIdx = -1;
+  renderDlgList(); renderDlgDefault(); updateDlgBtns();
+};
+document.getElementById("dlg-props").onclick   = () => { if (dlgSelIdx >= 0) openAddBrowserDialog(dlgSelIdx); };
+
+// ── "Portable…" button ───────────────────────────────────────────────────────
+document.getElementById("dlg-portable").addEventListener("click", async () => {
+  const path = await invoke("pick_browser_file").catch(() => null);
+  if (!path) return;
+  openAddBrowserDialog(-1, path, guessNameFromExePath(path));
+});
+
+// ── "Обнаружить" button ──────────────────────────────────────────────────────
+const dlgDetectStatus = document.getElementById("dlg-detect-status");
+document.getElementById("dlg-detect").addEventListener("click", async () => {
+  dlgDetectStatus.textContent = "Поиск…";
+  let detected = [];
+  try { detected = await invoke("detect_browser_exes"); } catch(e) { console.error(e); }
+
+  let added = 0;
+  const addedNames = [];
+  for (const b of detected) {
+    const already = dlgBrowsers.some(x =>
+      x.path.toLowerCase() === b.path.toLowerCase() || x.name === b.name);
+    if (!already) {
+      dlgBrowsers.push({ name: b.name, path: b.path });
+      addedNames.push(b.name);
+      added++;
+    }
+  }
+  if (added > 0) {
+    dlgSelIdx = dlgBrowsers.length - 1;
+    renderDlgList(); renderDlgDefault(); updateDlgBtns();
+    dlgDetectStatus.textContent = `Добавлено: ${addedNames.join(", ")}`;
+  } else if (detected.length === 0) {
+    dlgDetectStatus.textContent = "Браузеры не обнаружены.";
+  } else {
+    dlgDetectStatus.textContent = "Все найденные браузеры уже в списке.";
+  }
+  setTimeout(() => { dlgDetectStatus.textContent = ""; }, 3000);
+});
+
+// ── Helper ──────────────────────────────────────────────────────────────────
+function guessNameFromExePath(path) {
+  const exe = (path.split(/[\\/]/).pop() || "").replace(/\.exe$/i, "").toLowerCase();
+  const known = {
+    chrome: "Google Chrome", chromium: "Chromium",
+    firefox: "Mozilla Firefox", waterfox: "Waterfox", librewolf: "LibreWolf",
+    msedge: "Microsoft Edge", edge: "Microsoft Edge",
+    opera: "Opera", operagx: "Opera GX", launcher: "Opera",
+    brave: "Brave", vivaldi: "Vivaldi",
+    iexplore: "Internet Explorer",
+    palemoon: "Pale Moon", basilisk: "Basilisk", seamonkey: "SeaMonkey",
+  };
+  return known[exe] || (exe.charAt(0).toUpperCase() + exe.slice(1));
+}
+
+// ── Add/edit browser sub-dialog ───────────────────────────────────────────
+const addBrowserOverlay = document.getElementById("add-browser-overlay");
+const addBrowserName    = document.getElementById("add-browser-name");
+const addBrowserPath    = document.getElementById("add-browser-path");
+let   editBrowserIdx    = -1;
+
+function openAddBrowserDialog(idx, presetPath = "", presetName = "") {
+  editBrowserIdx = idx;
+  addBrowserName.value = idx >= 0 ? dlgBrowsers[idx].name : presetName;
+  addBrowserPath.value = idx >= 0 ? dlgBrowsers[idx].path : presetPath;
+  document.body.appendChild(addBrowserOverlay); // bring to DOM front
+  raiseOverlay(addBrowserOverlay);
+  setTimeout(() => addBrowserName.focus(), 30);
+}
+
+// "..." — native file picker via Rust/rfd
+document.getElementById("add-browser-browse").addEventListener("click", async () => {
+  const path = await invoke("pick_browser_file").catch(() => null);
+  if (!path) return;
+  addBrowserPath.value = path;
+  // Auto-fill name from filename if empty
+  if (!addBrowserName.value.trim()) {
+    const fname = path.split(/[\\/]/).pop().replace(/\.exe$/i, "");
+    addBrowserName.value = fname.charAt(0).toUpperCase() + fname.slice(1);
+  }
+  addBrowserName.focus();
+});
+
+function closeAddBrowserDialog() { addBrowserOverlay.classList.add("hidden"); }
+
+document.getElementById("add-browser-x").onclick      = closeAddBrowserDialog;
+document.getElementById("add-browser-cancel").onclick = closeAddBrowserDialog;
+document.getElementById("add-browser-ok").onclick = () => {
+  const name = addBrowserName.value.trim();
+  const path = addBrowserPath.value.trim();
+  if (!name || !path) return;
+  if (editBrowserIdx >= 0) {
+    dlgBrowsers[editBrowserIdx] = { name, path };
+  } else {
+    dlgBrowsers.push({ name, path });
+    dlgSelIdx = dlgBrowsers.length - 1;
+  }
+  closeAddBrowserDialog();
+  renderDlgList(); renderDlgDefault(); updateDlgBtns();
+};
+
+// Close dialogs on overlay click
+browsersOverlay.addEventListener("click",  (e) => { if (e.target === browsersOverlay)  closeBrowsersDialog(false); });
+addBrowserOverlay.addEventListener("click",(e) => { if (e.target === addBrowserOverlay) closeAddBrowserDialog(); });
+
+// ── Menu ──────────────────────────────────────────────────────────────────
+
+const ICONS = {
+  folder: `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4.5h4.2l1.1 1.5H13V11H1V4.5z"/></svg>`,
+  link:   `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M5.5 8.5a3 3 0 004.2 0l2-2a3 3 0 00-4.2-4.2L6.4 3.4"/><path d="M8.5 5.5a3 3 0 00-4.2 0l-2 2a3 3 0 004.2 4.2l1.1-1.1"/></svg>`,
+  gear:   `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><circle cx="7" cy="7" r="1.8"/><path d="M7 1.5v1.2M7 11.3v1.2M1.5 7h1.2M11.3 7h1.2M3.3 3.3l.85.85M9.85 9.85l.85.85M3.3 10.7l.85-.85M9.85 4.15l.85-.85"/></svg>`,
+  db:     `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><ellipse cx="7" cy="4" rx="4.5" ry="1.8"/><path d="M2.5 4v3c0 1 2 1.8 4.5 1.8S11.5 8 11.5 7V4"/><path d="M2.5 7v3c0 1 2 1.8 4.5 1.8S11.5 11 11.5 10V7"/></svg>`,
+  trash:  `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h10M5 4V2.5h4V4M3.5 4l1 7.5h5l1-7.5"/></svg>`,
+  backup: `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M7 2v7M4.5 6.5L7 9l2.5-2.5"/><path d="M2 11h10"/></svg>`,
+  import: `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 8.5v2.5H3V8.5M7 2v7M4.5 6L7 8.5 9.5 6"/></svg>`,
+  open:   `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M7 2.5L11 7 7 11.5M3 7h8"/></svg>`,
+  props:  `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><rect x="2" y="2" width="10" height="10" rx="1.2"/><path d="M5 5h4M5 7h4M5 9h2.5"/></svg>`,
+  check:  `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 7.5l3 3L11.5 4"/></svg>`,
+  search: `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="5.8" cy="5.8" r="3.5"/><path d="M9 9l3.5 3.5"/></svg>`,
+  dupes:  `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><rect x="1" y="4.5" width="8" height="7.5" rx="1"/><path d="M5 4.5V2H13v7.5h-2"/></svg>`,
+  quit:    `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2h3a1 1 0 011 1v8a1 1 0 01-1 1H9M5 4.5L2.5 7 5 9.5M2.5 7H10"/></svg>`,
+  sort:    `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 4h10M4 7h6M6 10h2"/></svg>`,
+  image:   `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><rect x="1" y="2.5" width="12" height="9" rx="1"/><path d="M1 9l3.5-3 3 3 2-2 4.5 4.5"/><circle cx="4.5" cy="5.5" r="1.1" fill="currentColor" stroke="none"/></svg>`,
+  refresh: `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 7A4.5 4.5 0 013 5.5M3 2.5v3h3"/></svg>`,
+  delimg:  `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><rect x="1" y="3" width="9" height="7" rx="1"/><path d="M10 5.5l3-3M13 5.5l-3-3"/></svg>`,
+  copy:    `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><rect x="4.5" y="4.5" width="8" height="8" rx="1"/><path d="M4.5 4.5V2H1.5v8.5H4.5"/></svg>`,
+  openwith:`<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M6 2H2a1 1 0 00-1 1v9a1 1 0 001 1h10a1 1 0 001-1V8"/><path d="M9.5 1.5h3V5M9 5.5l3.5-4"/></svg>`,
+  verify:  `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><circle cx="7" cy="7" r="5.5"/><path d="M4.5 7l2 2 3-3"/></svg>`,
+  browser:      `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><rect x="1" y="2.5" width="12" height="9" rx="1"/><path d="M1 5.5h12"/><circle cx="3.5" cy="4" r=".6" fill="currentColor" stroke="none"/><circle cx="5.5" cy="4" r=".6" fill="currentColor" stroke="none"/></svg>`,
+  edit:          `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2.5l2 2L5 11H3V9l6.5-6.5z"/><path d="M8.5 3.5l2 2"/></svg>`,
+  'expand-all':  `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><rect x="1" y="1" width="5" height="5" rx=".8"/><rect x="1" y="8" width="5" height="5" rx=".8"/><path d="M8 3.5h5M8 10.5h5M10.5 1.5v4M10.5 8.5v4"/></svg>`,
+  'collapse-all':`<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><rect x="1" y="1" width="5" height="5" rx=".8"/><rect x="1" y="8" width="5" height="5" rx=".8"/><path d="M8 3.5h5M8 10.5h5"/></svg>`,
+  'move-up':     `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 11V3M3.5 6.5L7 3l3.5 3.5"/></svg>`,
+  'move-down':   `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v8M3.5 7.5L7 11l3.5-3.5"/></svg>`,
+};
+
+// todo:true = disabled (not yet implemented)
+const MENU_DATA = [
+  {
+    id: 'file', label: 'Файл',
+    items: [
+      { label: 'Новая папка',             icon: 'folder', shortcut: 'Ctrl+N',       action: 'new-folder'  },
+      { label: 'Новая ссылка',            icon: 'link',   shortcut: 'Ctrl+Shift+N', action: 'new-link'    },
+      '---',
+      { label: 'Настройки',               icon: 'gear',                              action: 'settings' },
+      '---',
+      { label: 'Открыть базу',            icon: 'db',                                action: 'open-db',        todo: true },
+      { label: 'Создать базу',            icon: 'db',                                action: 'new-db',         todo: true },
+      '---',
+      { label: 'Очистить базу',           icon: 'trash',                             action: 'clear-db',       todo: true },
+      { label: 'Резервная копия',         icon: 'backup',                            action: 'backup',         todo: true },
+      '---',
+      { label: 'Выход',                   icon: 'quit',   shortcut: 'Alt+F4',        action: 'quit'                      },
+    ]
+  },
+  {
+    id: 'links', label: 'Ссылки',
+    items: [
+      { label: 'Открыть',           icon: 'open',    shortcut: 'Enter',  action: 'open-link'  },
+      { label: 'Открыть с помощью', icon: 'openwith',                    action: 'open-with'  },
+      { label: 'Свойства',          icon: 'props',   shortcut: 'F4',     action: 'properties' },
+      '---',
+      { label: 'Удалить ссылку',    icon: 'trash',   shortcut: 'Del',    action: 'delete-link'},
+      '---',
+      { label: 'Копировать URL',    icon: 'copy',    shortcut: 'Ctrl+C', action: 'copy-url'   },
+      '---',
+      { label: 'Импорт', icon: 'import', sub: [
+        { label: 'Из браузера…',          icon: 'browser', action: 'import-from-browser' },
+        '---',
+        { label: 'Из файла HTML',          icon: 'import',  action: 'import-html'         },
+        { label: 'Из файла TXT',           icon: 'import',  action: 'import-txt-lines'    },
+        '---',
+        { label: 'Файл синхронизации',     icon: 'backup',  action: 'import-sync'         },
+        { label: 'Из ua.dat…',            icon: 'folder',  action: 'import-folder'        },
+      ]},
+      { label: 'Экспорт', icon: 'backup', sub: [
+        { label: 'HTML файл',              icon: 'import', action: 'export-html'          },
+        { label: 'Текстовый файл',         icon: 'import', action: 'export-txt'           },
+        '---',
+        { label: 'Синхронизация с рисунками',  icon: 'backup', action: 'export-sync-with'    },
+        { label: 'Синхронизация без рисунков', icon: 'backup', action: 'export-sync-without' },
+      ]},
+      { label: 'Резервная копия', icon: 'backup', sub: [
+        { label: 'Создать без рисунков',   icon: 'backup', action: 'backup-without' },
+        { label: 'Создать с рисунками',    icon: 'backup', action: 'backup-with'    },
+        '---',
+        { label: 'Восстановить…',         icon: 'open',   action: 'backup-restore', todo: true },
+      ]},
+      '---',
+      { label: 'Сортировать все', icon: 'sort', sub: [
+        { label: 'По имени',                       icon: 'sort', action: 'sort-all-title-asc'    },
+        { label: 'По имени (обратный порядок)',     icon: 'sort', action: 'sort-all-title-desc'   },
+        '---',
+        { label: 'По URL',                         icon: 'sort', action: 'sort-all-url-asc'      },
+        { label: 'По URL (обратный порядок)',       icon: 'sort', action: 'sort-all-url-desc'     },
+        '---',
+        { label: 'По дате добавления',             icon: 'sort', action: 'sort-all-created-asc'  },
+        { label: 'По дате добавления (обратный)',  icon: 'sort', action: 'sort-all-created-desc' },
+      ]},
+      { label: 'Проверить все ссылки', icon: 'verify', action: 'check-all-links' },
+    ]
+  },
+  {
+    id: 'search', label: 'Поиск',
+    items: [
+      { label: 'Найти',                   icon: 'search', shortcut: 'Ctrl+F',        action: 'find'                      },
+      '---',
+      { label: 'Поиск дубликатов ссылок', icon: 'dupes',                             action: 'find-dupes'               },
+    ]
+  },
+  {
+    id: 'view', label: 'Вид',
+    items: [
+      { label: 'Открыть все папки',  icon: 'expand-all',  action: 'expand-all'       },
+      { label: 'Закрыть все папки', icon: 'collapse-all', action: 'collapse-all'     },
+      '---',
+      { label: 'Настроить toolbar…', icon: 'gear',        action: 'customize-toolbar'},
+    ]
+  },
+];
+
+// ── Command Registry — единый источник для всех команд ───────────────────────
+// Чтобы добавить новую команду: добавить запись сюда — она автоматически
+// появится в toolbar customization без других изменений.
+const CMD_REGISTRY = [
+  // Создание
+  { id:'new-link',            label:'Новая ссылка',              icon:'link',        group:'Создание',     shortcut:'Ctrl+Shift+N', action:'new-link' },
+  { id:'new-folder',          label:'Новая папка',               icon:'folder',      group:'Создание',     shortcut:'Ctrl+N',       action:'new-folder' },
+  { id:'new-subfolder',       label:'Новая подпапка',            icon:'folder',      group:'Создание',                              action:'new-subfolder' },
+  // Правка
+  { id:'delete-link',         label:'Удалить ссылку',            icon:'trash',       group:'Правка',       shortcut:'Del',          action:'delete-link' },
+  { id:'properties',          label:'Свойства ссылки',           icon:'props',       group:'Правка',       shortcut:'F4',           action:'properties' },
+  { id:'copy-url',            label:'Копировать URL',            icon:'copy',        group:'Правка',       shortcut:'Ctrl+C',       action:'copy-url' },
+  { id:'open-link',           label:'Открыть в браузере',        icon:'open',        group:'Правка',       shortcut:'Enter',        action:'open-link' },
+  { id:'open-with',           label:'Открыть с помощью…',        icon:'openwith',    group:'Правка',                                action:'open-with' },
+  { id:'refresh-thumb',       label:'Обновить рисунок',          icon:'refresh',     group:'Правка',                                action:'refresh-thumb' },
+  { id:'clear-thumb',         label:'Удалить рисунок',           icon:'delimg',      group:'Правка',                                action:'clear-thumb' },
+  // Навигация
+  { id:'expand-all',          label:'Открыть все папки',         icon:'expand-all',  group:'Навигация',                             action:'expand-all' },
+  { id:'collapse-all',        label:'Закрыть все папки',         icon:'collapse-all',group:'Навигация',                             action:'collapse-all' },
+  { id:'move-up',             label:'Переместить вверх',         icon:'move-up',     group:'Навигация',                             action:'move-up' },
+  { id:'move-down',           label:'Переместить вниз',          icon:'move-down',   group:'Навигация',                             action:'move-down' },
+  // Поиск
+  { id:'find',                label:'Поиск',                     icon:'search',      group:'Поиск',        shortcut:'Ctrl+F',       action:'find' },
+  { id:'find-dupes',          label:'Поиск дубликатов',          icon:'dupes',       group:'Поиск',                                 action:'find-dupes' },
+  // Проверка
+  { id:'check-all-links',     label:'Проверить все ссылки',      icon:'verify',      group:'Проверка',                              action:'check-all-links' },
+  // Импорт
+  { id:'import-from-browser', label:'Импорт из браузера',        icon:'import',      group:'Импорт',                                action:'import-from-browser' },
+  { id:'import-html',         label:'Импорт из HTML',            icon:'import',      group:'Импорт',                                action:'import-html' },
+  { id:'import-txt-lines',    label:'Импорт URL из TXT',         icon:'import',      group:'Импорт',                                action:'import-txt-lines' },
+  { id:'import-sync',         label:'Импорт синхронизации',      icon:'backup',      group:'Импорт',                                action:'import-sync' },
+  // Экспорт
+  { id:'export-html',         label:'Экспорт в HTML',            icon:'backup',      group:'Экспорт',                               action:'export-html' },
+  { id:'export-txt',          label:'Экспорт в TXT',             icon:'backup',      group:'Экспорт',                               action:'export-txt' },
+  { id:'export-sync-without', label:'Синхронизация',             icon:'backup',      group:'Экспорт',                               action:'export-sync-without' },
+  // Backup
+  { id:'backup-without',      label:'Backup (без рисунков)',      icon:'backup',      group:'Backup',                                action:'backup-without' },
+  { id:'backup-with',         label:'Backup (с рисунками)',       icon:'backup',      group:'Backup',                                action:'backup-with' },
+  // Сортировка
+  { id:'sort-title-asc',      label:'По имени ↑',                icon:'sort',        group:'Сортировка',                            action:'sort-all-title-asc' },
+  { id:'sort-title-desc',     label:'По имени ↓',                icon:'sort',        group:'Сортировка',                            action:'sort-all-title-desc' },
+  { id:'sort-url-asc',        label:'По URL ↑',                  icon:'sort',        group:'Сортировка',                            action:'sort-all-url-asc' },
+  { id:'sort-url-desc',       label:'По URL ↓',                  icon:'sort',        group:'Сортировка',                            action:'sort-all-url-desc' },
+  { id:'sort-created-asc',    label:'По дате ↑',                 icon:'sort',        group:'Сортировка',                            action:'sort-all-created-asc' },
+  { id:'sort-created-desc',   label:'По дате ↓',                 icon:'sort',        group:'Сортировка',                            action:'sort-all-created-desc' },
+];
+
+// Alias for backward-compat
+const TOOLBAR_DEFS = CMD_REGISTRY;
+
+const DEFAULT_TOOLBAR = [
+  'new-link', 'new-folder', '|',
+  'delete-link', 'properties', '|',
+  'find', '|',
+  'check-all-links', '|',
+  'expand-all', 'collapse-all',
+];
+
+let toolbarConfig = [...DEFAULT_TOOLBAR];
+
+async function loadToolbarConfig() {
+  try {
+    const json = await invoke('load_toolbar_config');
+    if (json) {
+      const arr = JSON.parse(json);
+      if (Array.isArray(arr) && arr.length) toolbarConfig = arr;
+    }
+  } catch(e) {}
+}
+
+async function saveToolbarConfig() {
+  try { await invoke('save_toolbar_config', { json: JSON.stringify(toolbarConfig) }); }
+  catch(e) { console.error(e); }
+}
+
+const toolbarEl = document.getElementById('toolbar');
+
+function tbIconHtml(iconKey) {
+  const raw = ICONS[iconKey] || '';
+  return raw.replace(/^<svg[^>]*>/, '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">');
+}
+
+function buildToolbar() {
+  toolbarEl.innerHTML = '';
+  for (const item of toolbarConfig) {
+    if (item === '|') {
+      const s = document.createElement('div'); s.className = 'tb-sep'; toolbarEl.appendChild(s);
+      continue;
+    }
+    const cmd = CMD_REGISTRY.find(c => c.id === item);
+    if (!cmd) continue;
+    const btn = document.createElement('button');
+    btn.className = 'tb-btn';
+    const hint = cmd.shortcut ? `${cmd.label} (${cmd.shortcut})` : cmd.label;
+    btn.title = hint;
+    btn.innerHTML = tbIconHtml(cmd.icon);
+    btn.addEventListener('click', () => handleToolbarAction(cmd.id));
+    toolbarEl.appendChild(btn);
+  }
+}
+
+// Dispatch: looks up cmd in registry → fires its action via handleMenuAction
+function handleToolbarAction(id) {
+  const cmd = CMD_REGISTRY.find(c => c.id === id);
+  if (!cmd) return;
+  // Special local actions (not going through handleMenuAction)
+  if (id === 'expand-all') {
+    treeEl.querySelectorAll('.tree-children').forEach(el => {
+      el.classList.add('open'); el.previousElementSibling?.classList.add('open');
+    }); return;
+  }
+  if (id === 'collapse-all') {
+    treeEl.querySelectorAll('.tree-children').forEach(el => {
+      el.classList.remove('open'); el.previousElementSibling?.classList.remove('open');
+    }); return;
+  }
+  if (id === 'move-up')   { tbMoveItem(-1); return; }
+  if (id === 'move-down') { tbMoveItem(+1); return; }
+  handleMenuAction(cmd.action || id);
+}
+
+function tbMoveItem(dir) {
+  const node = activeBookmarkNode ||
+    allNodes.find(n => String(n.id) === gridEl.querySelector('.card.selected')?.dataset.id);
+  if (!node || node.kind !== 'bookmark') return;
+  const siblings = allNodes
+    .filter(n => n.kind === 'bookmark' && n.parent === node.parent)
+    .sort((a, b) => (a.sort_idx ?? 0) - (b.sort_idx ?? 0));
+  const idx = siblings.findIndex(n => n.id === node.id);
+  if (idx < 0 || idx + dir < 0 || idx + dir >= siblings.length) return;
+  // Swap positions in array
+  [siblings[idx], siblings[idx + dir]] = [siblings[idx + dir], siblings[idx]];
+  // Persist new sort_idx for each sibling and update local state
+  Promise.all(siblings.map((n, si) => invoke('set_sort_idx', { id: n.id, sortIdx: si })))
+    .then(() => {
+      siblings.forEach((n, si) => { n.sort_idx = si; });
+      loadBookmarks(node.parent);
+    })
+    .catch(console.error);
+}
+
+// ── New item dialog (folder / bookmark) ───────────────────────────────────────
+
+(function() {
+  const overlay    = document.getElementById('new-item-overlay');
+  const titleEl    = document.getElementById('new-item-dlg-title');
+  const nameInput  = document.getElementById('new-item-name');
+  const urlInput   = document.getElementById('new-item-url');
+  const urlRow     = document.getElementById('new-item-url-row');
+  const okBtn      = document.getElementById('new-item-ok');
+  let _mode = 'folder'; // 'folder' | 'link'
+
+  function openNewItemDlg(mode) {
+    _mode = mode;
+    titleEl.textContent = 'Новая ссылка';
+    nameInput.value = '';
+    urlInput.value  = '';
+    urlRow.classList.remove('hidden');
+    raiseOverlay(overlay);
+    setTimeout(() => urlInput.focus(), 30);
+  }
+
+  // Новая папка → всегда root-level, без диалога, с inline rename
+  window.doNewFolder    = () => createFolderAndRename(null);
+  // Новая ссылка → диалог (нужен URL)
+  window.doNewLink      = () => { if (activeFolderId != null) openNewItemDlg('link'); };
+  // Новая подпапка → вложенная в текущую выбранную папку, с inline rename
+  window.doNewSubfolder = () => { if (activeFolderId != null) createFolderAndRename(activeFolderId); };
+
+  const warnEl = document.getElementById('new-item-warn');
+
+  async function submit() {
+    const pid = activeFolderId;
+    if (pid == null) return;
+    const url = urlInput.value.trim();
+    if (!url) return;
+
+    // Duplicate URL check
+    if (appSettings.noDuplicateUrls) {
+      const dup = allNodes.find(n => n.kind === 'bookmark' && n.url === url);
+      if (dup) {
+        warnEl.textContent = `Уже существует: «${dup.title}»`;
+        warnEl.classList.remove('hidden');
+        urlInput.focus();
+        return;
+      }
+    }
+    warnEl.classList.add('hidden');
+
+    const name = nameInput.value.trim() || url;
+    overlay.classList.add('hidden');
+    try {
+      await invoke('create_bookmark', { parentId: pid, title: name, url });
+      await loadBookmarks(pid);
+    } catch(e) { console.error(e); }
+  }
+
+  document.getElementById('new-item-x').onclick      = () => overlay.classList.add('hidden');
+  document.getElementById('new-item-cancel').onclick = () => overlay.classList.add('hidden');
+  okBtn.onclick = submit;
+  urlInput.addEventListener('input', () => warnEl.classList.add('hidden'));
+  [nameInput, urlInput].forEach(inp => inp.addEventListener('keydown', e => {
+    if (e.key === 'Enter') submit();
+    if (e.key === 'Escape') overlay.classList.add('hidden');
+  }));
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.classList.add('hidden'); });
+})();
+
+// ── Toolbar customize dialog ──────────────────────────────────────────────────
+
+(function() {
+  const overlay  = document.getElementById('tbc-overlay');
+  const availEl  = document.getElementById('tbc-avail');
+  const activeEl = document.getElementById('tbc-active');
+  const addBtn   = document.getElementById('tbc-add-btn');
+  const remBtn   = document.getElementById('tbc-rem-btn');
+  const upBtn    = document.getElementById('tbc-up');
+  const downBtn  = document.getElementById('tbc-down');
+  const delBtn   = document.getElementById('tbc-del');
+
+  let tbcItems  = [];  // current toolbar config copy
+  let availSelId = null;   // selected cmd id in left panel
+  let activeSel  = -1;    // selected index in right panel
+  let dragSrcIdx = -1;    // DnD source index in right panel
+  let dragSrcIsAvail = false; // DnD from left panel
+
+  // ── Left panel: grouped by CMD_REGISTRY.group ──────────────────────────────
+  function renderAvail() {
+    const used = new Set(tbcItems.filter(x => x !== '|'));
+    const groups = {};
+    for (const cmd of CMD_REGISTRY) {
+      if (used.has(cmd.id)) continue;
+      const g = cmd.group || 'Другое';
+      (groups[g] = groups[g] || []).push(cmd);
+    }
+    availEl.innerHTML = '';
+    for (const [grp, cmds] of Object.entries(groups)) {
+      const hdr = document.createElement('div');
+      hdr.className = 'tbc-group-hdr';
+      hdr.textContent = grp;
+      availEl.appendChild(hdr);
+      for (const cmd of cmds) {
+        const el = document.createElement('div');
+        el.className = 'dlg-browser-entry tbc-avail-item' + (availSelId === cmd.id ? ' selected' : '');
+        el.innerHTML = `<span class="tbc-item-icon">${tbIconHtml(cmd.icon)}</span>`
+                     + `<span class="tbc-item-label">${cmd.label}</span>`
+                     + (cmd.shortcut ? `<span class="tbc-item-sc">${cmd.shortcut}</span>` : '');
+        el.dataset.id = cmd.id;
+        el.draggable = true;
+        el.addEventListener('click',   () => { availSelId = cmd.id; activeSel = -1; render(); });
+        el.addEventListener('dblclick',() => { availSelId = cmd.id; doAdd(); });
+        el.addEventListener('dragstart', e => {
+          dragSrcIsAvail = true; dragSrcIdx = -1;
+          e.dataTransfer.effectAllowed = 'copy';
+          e.dataTransfer.setData('text/tbc-avail', cmd.id);
+        });
+        el.addEventListener('dragend', () => { dragSrcIsAvail = false; });
+        availEl.appendChild(el);
+      }
+    }
+  }
+
+  // ── Right panel: current toolbar items ────────────────────────────────────
+  function renderActive() {
+    activeEl.innerHTML = '';
+    tbcItems.forEach((item, i) => {
+      const el = document.createElement('div');
+      el.className = 'dlg-browser-entry tbc-act-item' + (activeSel === i ? ' selected' : '');
+      if (item === '|') {
+        el.className += ' tbc-sep-item';
+        el.textContent = '──────────';
+      } else {
+        const cmd = CMD_REGISTRY.find(c => c.id === item);
+        el.innerHTML = cmd
+          ? `<span class="tbc-item-icon">${tbIconHtml(cmd.icon)}</span><span class="tbc-item-label">${cmd.label}</span>`
+          : `<span class="tbc-item-label">${item}</span>`;
+      }
+      el.draggable = true;
+      el.addEventListener('click', () => { activeSel = i; availSelId = null; render(); });
+
+      // DnD — drag within active list
+      el.addEventListener('dragstart', e => {
+        dragSrcIdx = i; dragSrcIsAvail = false;
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/tbc-idx', String(i));
+        el.classList.add('tbc-dragging');
+      });
+      el.addEventListener('dragend', () => {
+        el.classList.remove('tbc-dragging');
+        activeEl.querySelectorAll('.tbc-drop-before,.tbc-drop-after').forEach(x => x.classList.remove('tbc-drop-before','tbc-drop-after'));
+      });
+      el.addEventListener('dragover', e => {
+        e.preventDefault();
+        activeEl.querySelectorAll('.tbc-drop-before,.tbc-drop-after').forEach(x => x.classList.remove('tbc-drop-before','tbc-drop-after'));
+        const rect = el.getBoundingClientRect();
+        el.classList.add(e.clientY < rect.top + rect.height / 2 ? 'tbc-drop-before' : 'tbc-drop-after');
+      });
+      el.addEventListener('dragleave', () => el.classList.remove('tbc-drop-before','tbc-drop-after'));
+      el.addEventListener('drop', e => {
+        e.preventDefault();
+        el.classList.remove('tbc-drop-before','tbc-drop-after');
+        const rect = el.getBoundingClientRect();
+        const before = e.clientY < rect.top + rect.height / 2;
+
+        if (dragSrcIsAvail) {
+          // Drop from left panel → insert
+          const cmdId = e.dataTransfer.getData('text/tbc-avail');
+          if (!cmdId || tbcItems.includes(cmdId)) return;
+          const at = before ? i : i + 1;
+          tbcItems.splice(at, 0, cmdId);
+          activeSel = at;
+        } else {
+          // Reorder within right panel
+          const src = parseInt(e.dataTransfer.getData('text/tbc-idx'));
+          if (isNaN(src) || src === i) return;
+          let dest = before ? i : i + 1;
+          if (src < dest) dest--;
+          const [moved] = tbcItems.splice(src, 1);
+          tbcItems.splice(dest, 0, moved);
+          activeSel = dest;
+        }
+        dragSrcIsAvail = false; dragSrcIdx = -1;
+        render();
+      });
+      activeEl.appendChild(el);
+    });
+
+    // Drop on empty area at bottom of list (from left panel)
+    activeEl.addEventListener('dragover', e => {
+      if (!dragSrcIsAvail) return;
+      e.preventDefault();
+    });
+    activeEl.addEventListener('drop', e => {
+      if (!dragSrcIsAvail) return;
+      const cmdId = e.dataTransfer.getData('text/tbc-avail');
+      if (!cmdId || tbcItems.includes(cmdId)) return;
+      // Only if dropped on the container (not on an item)
+      if (e.target !== activeEl) return;
+      e.preventDefault();
+      tbcItems.push(cmdId);
+      activeSel = tbcItems.length - 1;
+      dragSrcIsAvail = false;
+      render();
+    });
+  }
+
+  function render() { renderAvail(); renderActive(); updateBtns(); }
+
+  function updateBtns() {
+    const canAdd = availSelId != null && !tbcItems.includes(availSelId);
+    addBtn.disabled  = !canAdd;
+    remBtn.disabled  = activeSel < 0;
+    delBtn.disabled  = activeSel < 0;
+    upBtn.disabled   = activeSel <= 0;
+    downBtn.disabled = activeSel < 0 || activeSel >= tbcItems.length - 1;
+  }
+
+  function doAdd() {
+    if (!availSelId) return;
+    if (tbcItems.includes(availSelId)) return;
+    const at = activeSel >= 0 ? activeSel + 1 : tbcItems.length;
+    tbcItems.splice(at, 0, availSelId);
+    activeSel = at; availSelId = null;
+    render();
+  }
+
+  function doRemove() {
+    if (activeSel < 0) return;
+    tbcItems.splice(activeSel, 1);
+    if (activeSel >= tbcItems.length) activeSel = tbcItems.length - 1;
+    render();
+  }
+
+  function doMove(dir) {
+    const n = activeSel + dir;
+    if (n < 0 || n >= tbcItems.length) return;
+    [tbcItems[activeSel], tbcItems[n]] = [tbcItems[n], tbcItems[activeSel]];
+    activeSel = n;
+    render();
+  }
+
+  window.openToolbarCustomizeDialog = function() {
+    tbcItems = [...toolbarConfig];
+    availSelId = null; activeSel = -1;
+    render();
+    makeDlgDraggable(document.getElementById('tbc-dlg'), document.querySelector('#tbc-dlg .dlg-title'));
+    raiseOverlay(overlay);
+  };
+
+  document.getElementById('tbc-x').onclick      = () => overlay.classList.add('hidden');
+  document.getElementById('tbc-cancel').onclick = () => overlay.classList.add('hidden');
+  document.getElementById('tbc-add-sep').onclick = () => {
+    const at = activeSel >= 0 ? activeSel + 1 : tbcItems.length;
+    tbcItems.splice(at, 0, '|'); activeSel = at; render();
+  };
+  addBtn.onclick  = doAdd;
+  remBtn.onclick  = doRemove;
+  delBtn.onclick  = doRemove;
+  upBtn.onclick   = () => doMove(-1);
+  downBtn.onclick = () => doMove(+1);
+  document.getElementById('tbc-reset').onclick = () => {
+    tbcItems = [...DEFAULT_TOOLBAR]; activeSel = -1; availSelId = null; render();
+  };
+  document.getElementById('tbc-ok').onclick = () => {
+    toolbarConfig = tbcItems; buildToolbar(); saveToolbarConfig();
+    overlay.classList.add('hidden');
+  };
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.classList.add('hidden'); });
+})();
+
+function buildMenubar() {
+  const bar = document.getElementById('menubar');
+
+  for (const menu of MENU_DATA) {
+    const group = document.createElement('div');
+    group.className = 'menu-group';
+
+    const lbl = document.createElement('div');
+    lbl.className = 'menu-label';
+    lbl.textContent = menu.label;
+
+    const drop = document.createElement('div');
+    drop.className = 'menu-dropdown';
+
+    for (const item of menu.items) {
+      if (item === '---') {
+        const sep = document.createElement('div');
+        sep.className = 'menu-sep';
+        drop.appendChild(sep);
+        continue;
+      }
+      const entry = document.createElement('div');
+      const hasSub = Array.isArray(item.sub);
+      entry.className = 'menu-entry' + (item.todo ? ' disabled' : '') + (hasSub ? ' has-sub' : '');
+
+      const icon = document.createElement('span');
+      icon.className = 'entry-icon';
+      icon.innerHTML = ICONS[item.icon] || '';
+
+      const lbl2 = document.createElement('span');
+      lbl2.className = 'entry-label';
+      lbl2.textContent = item.label;
+
+      entry.append(icon, lbl2);
+
+      if (item.shortcut) {
+        const sc = document.createElement('span');
+        sc.className = 'entry-shortcut';
+        sc.textContent = item.shortcut;
+        entry.appendChild(sc);
+      }
+
+      // Nested submenu
+      if (hasSub) {
+        const subEl = document.createElement('div');
+        subEl.className = 'menu-sub';
+        for (const si of item.sub) {
+          if (si === '---') {
+            const s = document.createElement('div'); s.className = 'menu-sep';
+            subEl.appendChild(s); continue;
+          }
+          const se = document.createElement('div');
+          se.className = 'menu-entry' + (si.todo ? ' disabled' : '');
+          const ic = document.createElement('span'); ic.className = 'entry-icon';
+          ic.innerHTML = ICONS[si.icon] || '';
+          const lb = document.createElement('span'); lb.className = 'entry-label';
+          lb.textContent = si.label;
+          se.append(ic, lb);
+          if (!si.todo) {
+            se.addEventListener('click', (e) => { e.stopPropagation(); handleMenuAction(si.action); });
+          }
+          subEl.appendChild(se);
+        }
+        entry.appendChild(subEl);
+      } else if (!item.todo) {
+        entry.addEventListener('click', (e) => {
+          e.stopPropagation();
+          handleMenuAction(item.action);
+        });
+      }
+
+      drop.appendChild(entry);
+    }
+
+    group.append(lbl, drop);
+    bar.appendChild(group);
+
+    lbl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = group.classList.contains('open');
+      closeAllMenus();
+      if (!isOpen) group.classList.add('open');
+    });
+
+    lbl.addEventListener('mouseenter', () => {
+      if (document.querySelector('.menu-group.open')) {
+        closeAllMenus();
+        group.classList.add('open');
+      }
+    });
+  }
+
+  document.addEventListener('click', closeAllMenus);
+}
+
+function closeAllMenus() {
+  document.querySelectorAll('.menu-group.open').forEach(g => g.classList.remove('open'));
+}
+
+function handleMenuAction(action) {
+  closeAllMenus();
+  switch (action) {
+    // ── Export (whole DB via root folder) ──
+    case 'export-html': {
+      const fid = allFolders.find(f => f.parent == null)?.id ?? activeFolderId;
+      if (fid != null) invoke("export_folder_html", { folderId: fid }).catch(console.error);
+      break;
+    }
+    case 'export-txt': {
+      const fid = allFolders.find(f => f.parent == null)?.id ?? activeFolderId;
+      if (fid != null) invoke("export_folder_txt", { folderId: fid }).catch(console.error);
+      break;
+    }
+    case 'export-sync-with': {
+      const fid = allFolders.find(f => f.parent == null)?.id ?? activeFolderId;
+      if (fid != null) invoke("export_folder_sync", { folderId: fid, withImages: true }).catch(console.error);
+      break;
+    }
+    case 'export-sync-without': {
+      const fid = allFolders.find(f => f.parent == null)?.id ?? activeFolderId;
+      if (fid != null) invoke("export_folder_sync", { folderId: fid, withImages: false }).catch(console.error);
+      break;
+    }
+    // ── Backup ──
+    case 'backup-without': invoke("backup_db").catch(console.error); break;
+    case 'backup-with':    invoke("backup_db_with_data").catch(console.error); break;
+    // ── Sort all ──
+    case 'sort-all-title-asc':    invoke("sort_all_bookmarks", { by: "title",   desc: false }).then(refreshTree).catch(console.error); break;
+    case 'sort-all-title-desc':   invoke("sort_all_bookmarks", { by: "title",   desc: true  }).then(refreshTree).catch(console.error); break;
+    case 'sort-all-url-asc':      invoke("sort_all_bookmarks", { by: "url",     desc: false }).then(refreshTree).catch(console.error); break;
+    case 'sort-all-url-desc':     invoke("sort_all_bookmarks", { by: "url",     desc: true  }).then(refreshTree).catch(console.error); break;
+    case 'sort-all-created-asc':  invoke("sort_all_bookmarks", { by: "created", desc: false }).then(refreshTree).catch(console.error); break;
+    case 'sort-all-created-desc': invoke("sort_all_bookmarks", { by: "created", desc: true  }).then(refreshTree).catch(console.error); break;
+    // ── Check all ──
+    case 'check-all-links':
+      openCheckerPanel(null, allNodes.filter(n => n.kind === "bookmark" && n.url));
+      break;
+    case 'find-dupes':
+      openDupesDialog();
+      break;
+
+    // ── Import ──
+    case 'import-browser':
+      openBrowsersDialog();
+      break;
+    case 'import-from-browser':
+      openBrowserImportDialog();
+      break;
+    case 'import-txt-lines':
+      invoke("import_txt_lines")
+        .then(n => { if (n > 0) { refreshTree(); } })
+        .catch(e => { if (e !== 'Отменено') console.error('import_txt_lines:', e); });
+      break;
+    case 'import-html':
+      invoke("import_html")
+        .then(n => { if (n > 0) { refreshTree(); } })
+        .catch(e => { if (e !== 'Отменено') console.error('import_html:', e); });
+      break;
+    case 'import-txt':
+      invoke("import_txt")
+        .then(n => { if (n > 0) { refreshTree(); } })
+        .catch(e => { if (e !== 'Отменено') console.error('import_txt:', e); });
+      break;
+    case 'import-sync':
+      invoke("import_sync")
+        .then(n => { if (n > 0) { refreshTree(); } })
+        .catch(e => { if (e !== 'Отменено') console.error('import_sync:', e); });
+      break;
+    case 'import-folder':
+      invoke("import_uadat_pick")
+        .then(n => { if (n > 0) { refreshTree(); } })
+        .catch(e => { if (e !== 'Отменено') console.error('import_folder:', e); });
+      break;
+
+    case 'open-link': {
+      const t = getActiveLink();
+      if (t?.url) openWithBrowser(t.url, getDefaultBrowserPath());
+      break;
+    }
+    case 'open-with': {
+      const t = getActiveLink();
+      if (t?.url) showOpenWithDialog(t.url);
+      break;
+    }
+    case 'properties': {
+      const t = getActiveLink();
+      if (t) openPropsDialog(t);
+      break;
+    }
+    case 'copy-url': {
+      const url = getActiveLink()?.url;
+      if (url) navigator.clipboard.writeText(url).catch(() => {});
+      break;
+    }
+    case 'export-html': {
+      const t = getActiveLink();
+      const fid = t?.parent ?? activeFolderId;
+      if (fid != null) invoke("export_folder_html", { folderId: fid }).catch(console.error);
+      break;
+    }
+    case 'export-txt': {
+      const t = getActiveLink();
+      const fid = t?.parent ?? activeFolderId;
+      if (fid != null) invoke("export_folder_txt", { folderId: fid }).catch(console.error);
+      break;
+    }
+    case 'check-links': {
+      const t = getActiveLink();
+      const fid = t?.parent ?? activeFolderId;
+      const fn = fid != null ? allNodes.find(n => n.id === fid && n.kind === "folder") : null;
+      if (fn) openCheckerPanel(fn);
+      break;
+    }
+
+    case 'delete-link': {
+      const t = activeBookmarkNode
+        || allNodes.find(n => String(n.id) === gridEl.querySelector(".card.selected")?.dataset.id);
+      if (t) deleteBookmark(t);
+      break;
+    }
+    case 'find':
+      openSearchDialog();
+      break;
+    case 'new-folder':
+      doNewFolder();
+      break;
+    case 'new-link':
+      doNewLink();
+      break;
+    case 'new-subfolder':
+      doNewSubfolder();
+      break;
+    case 'expand-all':
+      treeEl.querySelectorAll('.tree-children').forEach(el => {
+        el.classList.add('open');
+        el.previousElementSibling?.classList.add('open');
+      });
+      break;
+    case 'collapse-all':
+      treeEl.querySelectorAll('.tree-children').forEach(el => {
+        el.classList.remove('open');
+        el.previousElementSibling?.classList.remove('open');
+      });
+      break;
+    case 'settings':
+      openSettingsDialog();
+      break;
+    case 'customize-toolbar':
+      openToolbarCustomizeDialog();
+      break;
+    case 'quit':
+      window.close();
+      break;
+  }
+}
+
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey && e.key === 'f') {
+    e.preventDefault(); handleMenuAction('find'); return;
+  }
+  if (e.ctrlKey && e.shiftKey && e.key === 'N') {
+    e.preventDefault(); handleMenuAction('new-link'); return;
+  }
+  if (e.ctrlKey && !e.shiftKey && e.key === 'n') {
+    e.preventDefault(); handleMenuAction('new-folder'); return;
+  }
+
+  // Ctrl+C — copy URL of selected card or active bookmark
+  if (e.ctrlKey && e.key === 'c' && !window.getSelection()?.toString()) {
+    const selected = gridEl.querySelector(".card.selected");
+    const url = selected?.dataset.url || ctxTarget?.url || activeBookmarkNode?.url;
+    if (url) { e.preventDefault(); navigator.clipboard.writeText(url).catch(() => {}); }
+    return;
+  }
+
+  // Navigation inside search results
+  const inSearch = !searchResultsEl.classList.contains("hidden") && searchResults.length > 0;
+  if (inSearch) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActiveResult(activeResultIdx + 1);
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActiveResult(activeResultIdx - 1);
+      return;
+    }
+    if (e.key === 'Enter' && activeResultIdx >= 0) {
+      e.preventDefault();
+      openSearchResult(activeResultIdx);
+      return;
+    }
+  }
+
+  // Enter — open URL (when not in input/search)
+  if ((e.key === 'Enter' || (e.ctrlKey && e.key === 'Enter')) && !e.target.matches('input,textarea')) {
+    const url = activeBookmarkNode?.url
+      || allNodes.find(n => String(n.id) === gridEl.querySelector(".card.selected")?.dataset.id)?.url;
+    if (url) { e.preventDefault(); openWithBrowser(url, getDefaultBrowserPath()); }
+  }
+
+  // Del — delete focused tree item (folder or bookmark) or selected card
+  if (e.key === 'Delete' && !e.target.matches('input,textarea')) {
+    const focused = document.activeElement;
+    if (focused?.classList.contains("tree-item")) {
+      const node = allNodes.find(n => n.id === parseInt(focused.dataset.id));
+      if (node) {
+        e.preventDefault();
+        if (node.kind === "folder") deleteFolder(node);
+        else deleteBookmark(node);
+      }
+      return;
+    }
+    const target = activeBookmarkNode
+      || allNodes.find(n => String(n.id) === gridEl.querySelector(".card.selected")?.dataset.id);
+    if (target) { e.preventDefault(); deleteBookmark(target); }
+  }
+
+  // F4 — properties of focused/active item
+  if (e.key === 'F2') {
+    const focused = document.activeElement;
+    if (focused?.classList.contains("tree-item")) {
+      const node = allNodes.find(n => n.id === parseInt(focused.dataset.id, 10));
+      if (node?.kind === 'folder') { e.preventDefault(); startInlineRename(node.id); }
+    }
+    return;
+  }
+
+  if (e.key === 'F4') {
+    const focused = document.activeElement;
+    if (focused?.classList.contains("tree-item")) {
+      const node = allNodes.find(n => n.id === parseInt(focused.dataset.id));
+      if (node) {
+        e.preventDefault();
+        if (node.kind === "folder") openFolderPropsDialog(node);
+        else openPropsDialog(node);
+      }
+      return;
+    }
+    const target = activeBookmarkNode
+      || allNodes.find(n => String(n.id) === gridEl.querySelector(".card.selected")?.dataset.id);
+    if (target) { e.preventDefault(); openPropsDialog(target); }
+  }
+
+  if (e.key === 'Escape') {
+    closeAllMenus();
+    // Close topmost visible overlay dialog
+    const openOverlays = [...document.querySelectorAll('.dlg-overlay:not(.hidden)')];
+    if (openOverlays.length > 0) {
+      const top = openOverlays[openOverlays.length - 1];
+      const closeBtn = top.querySelector('.dlg-close, [id$="-cancel"], [id$="-close-btn"]');
+      closeBtn?.click();
+      return;
+    }
+    if (searchEl.value) {
+      clearSearch();
+    } else if (activeBookmarkNode?.parent != null) {
+      selectFolder(activeBookmarkNode.parent);
+    }
+  }
+});
+
+// ── State ─────────────────────────────────────────────────────────────────
+let allNodes          = [];
+let allFolders        = [];
+let activeFolderId    = null;
+let activeBookmarkNode = null;
+
+// ── Theme ─────────────────────────────────────────────────────────────────
+const themeBtn = document.getElementById("theme-btn");
+
+// ── App settings ──────────────────────────────────────────────────────────────
+
+let appSettings = {
+  // Общие
+  theme:         'dark',
+  showToolbar:   true,
+  accordionTree: true,
+  confirmDelete: true,
+  noDuplicateUrls: false,
+  // Прокси
+  proxyEnabled:  false,
+  proxyHost:     '',
+  proxyPort:     '',
+  proxyUser:     '',
+  proxyPass:     '',
+  // Рисунок
+  thumbWidth:    1280,
+  thumbHeight:   800,
+  thumbTimeout:  10,
+};
+
+async function loadAppSettings() {
+  try {
+    const json = await invoke('load_settings');
+    if (json) {
+      Object.assign(appSettings, JSON.parse(json));
+    } else {
+      // Migrate theme from localStorage on first run
+      const lsTheme = localStorage.getItem('theme');
+      if (lsTheme) appSettings.theme = lsTheme;
+    }
+  } catch(e) {}
+  applySettings(false);
+}
+
+async function saveAppSettings() {
+  try { await invoke('save_settings', { json: JSON.stringify(appSettings) }); }
+  catch(e) { console.error(e); }
+}
+
+function applySettings(save = true) {
+  applyTheme(appSettings.theme);
+  // Toolbar visibility
+  if (typeof toolbarEl !== 'undefined') {
+    if (appSettings.showToolbar) toolbarEl.classList.remove('hidden');
+    else toolbarEl.classList.add('hidden');
+  }
+  if (save) saveAppSettings();
+}
+
+// ── Settings dialog ────────────────────────────────────────────────────────────
+
+(function() {
+  const overlay = document.getElementById('settings-overlay');
+
+  // ── Tab switching ──
+  const tabs   = document.querySelectorAll('#settings-tabs .stab');
+  const panels = document.querySelectorAll('.stab-panel');
+  tabs.forEach(tab => tab.addEventListener('click', () => {
+    tabs.forEach(t => t.classList.remove('active'));
+    panels.forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('stab-' + tab.dataset.tab)?.classList.add('active');
+  }));
+
+  // ── Proxy: enable/disable fields ──
+  const proxyEnEl   = document.getElementById('s-proxy-en');
+  const proxyFields = ['s-proxy-host','s-proxy-port','s-proxy-user','s-proxy-pass'];
+  function syncProxyFields() {
+    proxyFields.forEach(id => { document.getElementById(id).disabled = !proxyEnEl.checked; });
+  }
+  proxyEnEl.addEventListener('change', syncProxyFields);
+
+  // ── Open dialog: populate fields ──
+  window.openSettingsDialog = function() {
+    // Reset to first tab
+    tabs.forEach(t => t.classList.remove('active'));
+    panels.forEach(p => p.classList.remove('active'));
+    tabs[0]?.classList.add('active');
+    document.getElementById('stab-general')?.classList.add('active');
+
+    // Общие
+    document.getElementById('s-theme').value        = appSettings.theme;
+    document.getElementById('s-show-toolbar').checked = appSettings.showToolbar;
+    document.getElementById('s-accordion').checked   = appSettings.accordionTree;
+    document.getElementById('s-confirm-del').checked  = appSettings.confirmDelete;
+    document.getElementById('s-no-dupes').checked     = appSettings.noDuplicateUrls;
+    // Прокси
+    proxyEnEl.checked = appSettings.proxyEnabled;
+    document.getElementById('s-proxy-host').value = appSettings.proxyHost;
+    document.getElementById('s-proxy-port').value = appSettings.proxyPort;
+    document.getElementById('s-proxy-user').value = appSettings.proxyUser;
+    document.getElementById('s-proxy-pass').value = appSettings.proxyPass;
+    syncProxyFields();
+    // Рисунок
+    document.getElementById('s-thumb-w').value       = appSettings.thumbWidth;
+    document.getElementById('s-thumb-h').value       = appSettings.thumbHeight;
+    document.getElementById('s-thumb-timeout').value = appSettings.thumbTimeout;
+
+    raiseOverlay(overlay);
+  };
+
+  // ── Save ──
+  document.getElementById('settings-x').onclick      = () => overlay.classList.add('hidden');
+  document.getElementById('settings-cancel').onclick = () => overlay.classList.add('hidden');
+  document.getElementById('settings-ok').onclick = () => {
+    // Общие
+    appSettings.theme           = document.getElementById('s-theme').value;
+    appSettings.showToolbar     = document.getElementById('s-show-toolbar').checked;
+    appSettings.accordionTree   = document.getElementById('s-accordion').checked;
+    appSettings.confirmDelete   = document.getElementById('s-confirm-del').checked;
+    appSettings.noDuplicateUrls = document.getElementById('s-no-dupes').checked;
+    // Прокси
+    appSettings.proxyEnabled = proxyEnEl.checked;
+    appSettings.proxyHost    = document.getElementById('s-proxy-host').value.trim();
+    appSettings.proxyPort    = document.getElementById('s-proxy-port').value.trim();
+    appSettings.proxyUser    = document.getElementById('s-proxy-user').value.trim();
+    appSettings.proxyPass    = document.getElementById('s-proxy-pass').value;
+    // Рисунок
+    appSettings.thumbWidth   = parseInt(document.getElementById('s-thumb-w').value)   || 1280;
+    appSettings.thumbHeight  = parseInt(document.getElementById('s-thumb-h').value)   || 800;
+    appSettings.thumbTimeout = parseInt(document.getElementById('s-thumb-timeout').value) || 10;
+
+    applySettings(true);
+    overlay.classList.add('hidden');
+  };
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.classList.add('hidden'); });
+})();
+
+// ── Theme button ───────────────────────────────────────────────────────────────
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  themeBtn.textContent = theme === "light" ? "🌙" : "☀";
+  localStorage.setItem("theme", theme); // fast cache for pre-load
+}
+
+// Immediate apply from localStorage (before async settings load)
+applyTheme(localStorage.getItem("theme") || "dark");
+
+themeBtn.addEventListener("click", () => {
+  const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+  appSettings.theme = next;
+  applyTheme(next);
+  saveAppSettings();
+});
+
+// ── DOM refs ──────────────────────────────────────────────────────────────
+const importScreen = document.getElementById("import-screen");
+const app          = document.getElementById("app");
+const treeEl       = document.getElementById("tree");
+const gridEl       = document.getElementById("grid");
+const breadcrumb   = document.getElementById("breadcrumb");
+const emptyHint    = document.getElementById("empty-hint");
+const searchEl        = document.getElementById("search");
+const searchClearBtn  = document.getElementById("search-clear");
+const searchResultsEl = document.getElementById("search-results");
+const searchbarEl     = document.getElementById("searchbar");
+const detailViewEl    = document.getElementById("detail-view");
+const detailThumbEl   = document.getElementById("detail-thumb-wrap");
+const detailImgEl     = document.getElementById("detail-img");
+const detailNoImgEl   = document.getElementById("detail-no-img");
+const detailUrlEl     = document.getElementById("detail-url");
+const detailNoteEl    = document.getElementById("detail-note");
+const detailOpenBtn   = document.getElementById("detail-open-btn");
+const datPathInput    = document.getElementById("dat-path");
+const importBtn    = document.getElementById("import-btn");
+const importStatus = document.getElementById("import-status");
+
+// ── Init ──────────────────────────────────────────────────────────────────
+async function init() {
+  await Promise.all([loadBrowsersConfig(), loadToolbarConfig(), loadAppSettings()]);
+  buildToolbar();
+  const empty = await invoke("is_empty");
+  if (empty) {
+    await showImportScreen();
+  } else {
+    await showApp();
+  }
+}
+
+// ── Import screen ─────────────────────────────────────────────────────────
+async function showImportScreen() {
+  importScreen.classList.remove("hidden");
+  app.classList.add("hidden");
+
+  // Try to auto-detect ua.dat next to the exe
+  try {
+    const found = await invoke("find_uadat");
+    if (found) {
+      datPathInput.value = found;
+      importStatus.textContent = "Найден файл данных.";
+    }
+  } catch (_) {}
+}
+
+importBtn.addEventListener("click", async () => {
+  const path = datPathInput.value.trim();
+  if (!path) return;
+
+  importBtn.disabled  = true;
+  importStatus.textContent = "Импортирую…";
+
+  try {
+    const count = await invoke("import_uadat", { path });
+    importStatus.textContent = `Импортировано ${count} записей.`;
+    setTimeout(async () => {
+      importScreen.classList.add("hidden");
+      await showApp();
+    }, 800);
+  } catch (err) {
+    importStatus.textContent = `Ошибка: ${err}`;
+    importBtn.disabled = false;
+  }
+});
+
+// ── Main app ──────────────────────────────────────────────────────────────
+async function showApp() {
+  app.classList.remove("hidden");
+  if (appSettings.showToolbar) toolbarEl.classList.remove("hidden");
+  importScreen.classList.add("hidden");
+
+  allNodes   = await invoke("get_tree");
+  allFolders = allNodes.filter(n => n.kind === "folder");
+  renderTree();
+
+  // Auto-select first top-level folder
+  const roots    = allFolders.filter(f => f.parent === null);
+  const topLevel = roots.length === 1
+    ? allFolders.filter(f => f.parent === roots[0].id)
+    : roots;
+  if (topLevel.length > 0) selectFolder(topLevel[0].id);
+}
+
+// ── Tree ──────────────────────────────────────────────────────────────────
+function buildTree() {
+  const map = new Map();
+  for (const n of allNodes) map.set(n.id, { ...n, children: [] });
+
+  const roots = [];
+  for (const n of allNodes) {
+    if (n.parent == null) roots.push(map.get(n.id));
+    else map.get(n.parent)?.children.push(map.get(n.id));
+  }
+
+  // Skip the single root wrapper node (the old "Закладки!!!" node)
+  if (roots.length === 1 && roots[0].kind === "folder" && roots[0].children.length > 0) {
+    return roots[0].children;
+  }
+  return roots;
+}
+
+function renderTree() {
+  const roots = buildTree();
+  treeEl.innerHTML = "";
+  for (const node of roots) {
+    treeEl.appendChild(createTreeNode(node, 0));
+  }
+}
+
+function createTreeNode(node, depth) {
+  const wrap = document.createElement("div");
+
+  const item = document.createElement("div");
+  item.style.paddingLeft = `${12 + depth * 14}px`;
+  item.dataset.id   = node.id;
+  item.dataset.kind = node.kind;
+  if (node.url) item.dataset.url = node.url;
+  item.tabIndex = -1;
+
+  wrap.appendChild(item);
+
+  if (node.kind === "folder") {
+    item.className = "tree-item";
+
+    const arrow = document.createElement("span");
+    arrow.className = "arrow";
+    arrow.textContent = node.children.length > 0 ? "▶" : "";
+
+    const label = document.createElement("span");
+    label.className = "label";
+    label.textContent = node.title;
+
+    item.append(arrow, label);
+
+    if (node.count > 0) {
+      const badge = document.createElement("span");
+      badge.className = "tree-count";
+      badge.textContent = node.count;
+      item.appendChild(badge);
+    }
+
+    let childrenEl = null;
+    if (node.children.length > 0) {
+      childrenEl = document.createElement("div");
+      childrenEl.className = "tree-children";
+      for (const child of node.children) {
+        childrenEl.appendChild(createTreeNode(child, depth + 1));
+      }
+      wrap.appendChild(childrenEl);
+    }
+
+    item.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (childrenEl) {
+        const opening = !childrenEl.classList.contains("open");
+        childrenEl.classList.toggle("open", opening);
+        item.classList.toggle("open", opening);
+        if (opening && appSettings.accordionTree) collapseSiblingBranches(node.id);
+      }
+      selectFolder(node.id);
+    });
+
+    item.addEventListener("contextmenu", (e) => {
+      e.stopPropagation();
+      showFolderContextMenu(e, node);
+    });
+
+  } else {
+    // Bookmark leaf
+    item.className = "tree-item link";
+
+    const icon = document.createElement("span");
+    icon.className = "tree-link-icon";
+    icon.innerHTML = ICONS.link;
+
+    const label = document.createElement("span");
+    label.className = "label";
+    label.textContent = node.title;
+
+    item.append(icon, label);
+
+    item.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (e.detail >= 2) { if (node.url) openWithBrowser(node.url, getDefaultBrowserPath()); }
+      else selectTreeBookmark(node);
+    });
+
+    item.addEventListener("contextmenu", (e) => {
+      selectTreeBookmark(node);
+      showContextMenu(e, node);
+    });
+  }
+
+  item.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    if (node.kind === "bookmark" && node.url) invoke("open_url", { url: node.url });
+    else item.click();
+  });
+
+  return wrap;
+}
+
+// ── Search dialog (Win32-style) ───────────────────────────────────────────
+const searchDlgOverlay = document.getElementById("search-dlg-overlay");
+const searchDlgInput   = document.getElementById("search-dlg-input");
+const schTitle         = document.getElementById("sch-title");
+const schUrl           = document.getElementById("sch-url");
+const schNote          = document.getElementById("sch-note");
+
+function openSearchDialog() {
+  raiseOverlay(searchDlgOverlay);
+  setTimeout(() => searchDlgInput.select() || searchDlgInput.focus(), 30);
+}
+
+function closeSearchDialog() {
+  searchDlgOverlay.classList.add("hidden");
+}
+
+function runSearchFromDialog() {
+  const q = searchDlgInput.value.trim();
+  if (!q) return;
+  closeSearchDialog();
+  doSearch(q, {
+    title: schTitle.checked,
+    url:   schUrl.checked,
+    note:  schNote.checked,
+  });
+}
+
+document.getElementById("search-dlg-x").onclick     = closeSearchDialog;
+document.getElementById("search-dlg-close").onclick = closeSearchDialog;
+document.getElementById("search-dlg-find").onclick  = runSearchFromDialog;
+searchDlgOverlay.addEventListener("click", (e) => {
+  if (e.target === searchDlgOverlay) closeSearchDialog();
+});
+searchDlgInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); runSearchFromDialog(); }
+  if (e.key === "Escape") { e.preventDefault(); closeSearchDialog(); }
+});
+
+// ── Global search ─────────────────────────────────────────────────────────
+let searchTimer   = null;
+let searchResults = [];
+let activeResultIdx = -1;
+
+function getFolderPath(folderId) {
+  const parts = [];
+  let cur = folderId;
+  const singleRoot = allFolders.filter(f => f.parent == null).length === 1;
+  while (cur != null) {
+    const node = allFolders.find(f => f.id === cur);
+    if (!node) break;
+    if (node.parent == null && singleRoot) break; // skip root wrapper
+    parts.unshift(node.title);
+    cur = node.parent;
+  }
+  return parts.join(" / ");
+}
+
+function enterSearchMode() {
+  hideDetailView();
+  gridEl.classList.add("hidden");
+  emptyHint.classList.add("hidden");
+  searchResultsEl.classList.remove("hidden");
+}
+
+// Only clears search UI, does NOT reload current folder.
+function clearSearchUI() {
+  if (searchResultsEl.classList.contains("hidden")) return;
+  searchResultsEl.classList.add("hidden");
+  searchResultsEl.innerHTML = "";
+  gridEl.classList.remove("hidden");
+  searchResults    = [];
+  activeResultIdx  = -1;
+}
+
+// Clears search UI and reloads current folder.
+function exitSearchMode() {
+  searchEl.value = "";
+  searchClearBtn.classList.remove("visible");
+  clearTimeout(searchTimer);
+  clearSearchUI();
+  if (activeFolderId != null) loadBookmarks(activeFolderId);
+}
+
+// Expand all ancestor folders in the tree so folderId becomes visible.
+// Returns Set of ancestor folder IDs for a given folderId
+function getAncestorIds(folderId) {
+  const ids = new Set();
+  let cur = allFolders.find(f => f.id === folderId)?.parent;
+  while (cur != null) {
+    ids.add(cur);
+    cur = allFolders.find(f => f.id === cur)?.parent;
+  }
+  return ids;
+}
+
+// Single-branch accordion: close every open branch not on the path to activeFolderId
+function collapseSiblingBranches(activeFolderId) {
+  const keep = getAncestorIds(activeFolderId);
+  keep.add(activeFolderId);
+  treeEl.querySelectorAll('.tree-children.open').forEach(childrenEl => {
+    const parentItem = childrenEl.previousElementSibling;
+    if (!parentItem) return;
+    const pid = parseInt(parentItem.dataset.id, 10);
+    if (!isNaN(pid) && !keep.has(pid)) {
+      childrenEl.classList.remove('open');
+      parentItem.classList.remove('open');
+    }
+  });
+}
+
+function expandTreePath(folderId) {
+  const ancestors = [];
+  let cur = allFolders.find(f => f.id === folderId)?.parent;
+  while (cur != null) {
+    ancestors.unshift(cur);
+    cur = allFolders.find(f => f.id === cur)?.parent;
+  }
+  for (const id of ancestors) {
+    const item = treeEl.querySelector(`.tree-item[data-id="${id}"]`);
+    if (!item) continue;
+    const children = item.parentElement.querySelector(":scope > .tree-children");
+    if (children) { children.classList.add("open"); item.classList.add("open"); }
+  }
+  if (appSettings.accordionTree) collapseSiblingBranches(folderId);
+}
+
+function highlightCard(bookmarkId) {
+  gridEl.querySelectorAll(".card.highlighted").forEach(c => c.classList.remove("highlighted"));
+  const card = gridEl.querySelector(`.card[data-id="${bookmarkId}"]`);
+  if (card) {
+    card.classList.add("highlighted");
+    card.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+}
+
+function navigateToResult(result) {
+  if (result.parent == null) return;
+  clearSearchUI();
+  searchEl.value = "";
+  const node = allNodes.find(n => n.id === result.id) || result;
+  navigateToCard(node);
+}
+
+async function doSearch(q, fields = { title: true, url: true, note: true }) {
+  if (!q) { exitSearchMode(); return; }
+  enterSearchMode();
+  try {
+    searchResults = await invoke("search_bookmarks", {
+      query:   q,
+      byTitle: fields.title !== false,
+      byUrl:   fields.url   !== false,
+      byNote:  fields.note  !== false,
+    });
+    renderSearchResults(q);
+  } catch (err) { console.error(err); }
+}
+
+function renderSearchResults(q) {
+  searchResultsEl.innerHTML = "";
+  activeResultIdx = -1;
+
+  if (searchResults.length === 0) {
+    const el = document.createElement("div");
+    el.className = "search-empty";
+    el.textContent = "Ничего не найдено.";
+    searchResultsEl.appendChild(el);
+    return;
+  }
+
+  const cnt = document.createElement("div");
+  cnt.className = "result-count";
+  cnt.textContent = `Найдено: ${searchResults.length}`;
+  searchResultsEl.appendChild(cnt);
+
+  searchResults.forEach((r, i) => {
+    const item = document.createElement("div");
+    item.className = "result-item";
+
+    const top = document.createElement("div");
+    top.className = "result-top";
+
+    const title = document.createElement("span");
+    title.className = "result-title";
+    title.textContent = r.title;
+
+    const path = document.createElement("span");
+    path.className = "result-path";
+    path.textContent = getFolderPath(r.parent);
+
+    top.append(title, path);
+
+    const url = document.createElement("div");
+    url.className = "result-url";
+    url.textContent = r.url;
+    url.title = r.url;
+
+    item.append(top, url);
+    item.addEventListener("click", (e) => {
+      if (e.detail >= 2) openSearchResult(i);   // double-click → open URL
+      else               navigateToResult(r);    // single-click → navigate
+    });
+    item.addEventListener("mouseenter", () => setActiveResult(i, false));
+    searchResultsEl.appendChild(item);
+  });
+}
+
+function setActiveResult(idx, scroll = true) {
+  searchResultsEl.querySelectorAll(".result-item.active")
+    .forEach(el => el.classList.remove("active"));
+  activeResultIdx = Math.max(0, Math.min(idx, searchResults.length - 1));
+  const items = searchResultsEl.querySelectorAll(".result-item");
+  if (items[activeResultIdx]) {
+    items[activeResultIdx].classList.add("active");
+    if (scroll) items[activeResultIdx].scrollIntoView({ block: "nearest" });
+  }
+}
+
+function openSearchResult(idx) {
+  const r = searchResults[idx];
+  if (r?.url) invoke("open_url", { url: r.url });
+}
+
+function clearSearch() {
+  searchEl.value = "";
+  searchClearBtn.classList.remove("visible");
+  exitSearchMode();
+  searchEl.focus();
+}
+
+searchEl.addEventListener("input", () => {
+  const q = searchEl.value.trim();
+  searchClearBtn.classList.toggle("visible", q.length > 0);
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => doSearch(q), 200);
+});
+
+searchClearBtn.addEventListener("click", clearSearch);
+
+// ── Detail view ───────────────────────────────────────────────────────────
+function showDetailView(node) {
+  activeBookmarkNode = node;
+  searchbarEl.classList.add("hidden");
+  gridEl.classList.add("hidden");
+  emptyHint.classList.add("hidden");
+  searchResultsEl.classList.add("hidden");
+  detailViewEl.classList.remove("hidden");
+
+  const url = node.url || "";
+
+  // URL row
+  detailUrlEl.textContent = url;
+  detailUrlEl.title = url;
+
+  // Note (read-only)
+  detailNoteEl.textContent = node.note || "";
+
+  // Thumbnail
+  if (node.thumb) {
+    detailImgEl.src = convertFileSrc(node.thumb);
+    detailImgEl.style.display = "";
+    detailNoImgEl.style.display = "none";
+    detailImgEl.onerror = () => {
+      detailImgEl.style.display = "none";
+      detailNoImgEl.style.display = "";
+      setNoImgPlaceholder(node);
+    };
+  } else {
+    detailImgEl.style.display = "none";
+    detailNoImgEl.style.display = "";
+    setNoImgPlaceholder(node);
+  }
+
+  // Open handlers
+  const open = () => { if (url) invoke("open_url", { url }); };
+  detailOpenBtn.onclick      = open;
+  detailUrlEl.onclick        = open;
+  detailThumbEl.ondblclick   = open;
+  detailViewEl.oncontextmenu = (e) => showContextMenu(e, node);
+}
+
+function setNoImgPlaceholder(node) {
+  try {
+    detailNoImgEl.textContent = new URL(
+      (node.url || "").startsWith("http") ? node.url : "http://" + node.url
+    ).hostname.replace(/^www\./, "").slice(0, 2).toUpperCase();
+  } catch { detailNoImgEl.textContent = (node.title || "?").slice(0, 2).toUpperCase(); }
+}
+
+function hideDetailView() {
+  activeBookmarkNode = null;
+  detailViewEl.classList.add("hidden");
+  searchbarEl.classList.remove("hidden");
+  gridEl.classList.remove("hidden");
+}
+
+function selectTreeBookmark(node) {
+  hideContextMenu();
+  // Update tree active state
+  treeEl.querySelectorAll(".tree-item.active").forEach(el => el.classList.remove("active"));
+  const treeItem = treeEl.querySelector(`.tree-item[data-id="${node.id}"]`);
+  if (treeItem) { treeItem.classList.add("active"); treeItem.focus(); }
+
+  // Breadcrumb: full path + bookmark title
+  breadcrumb.textContent = node.parent != null
+    ? buildBreadcrumbText(node.parent) + "  /  " + node.title
+    : node.title;
+
+  showDetailView(node);
+}
+
+// ── Tree keyboard navigation ───────────────────────────────────────────────
+treeEl.addEventListener("keydown", (e) => {
+  const focused = document.activeElement;
+  if (!focused?.classList.contains("tree-item")) return;
+
+  const items = getVisibleTreeItems();
+  const idx   = items.indexOf(focused);
+
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    items[Math.min(idx + 1, items.length - 1)]?.focus();
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    items[Math.max(idx - 1, 0)]?.focus();
+  } else if (e.key === "ArrowRight" && focused.dataset.kind === "folder") {
+    const ch = focused.parentElement.querySelector(":scope > .tree-children");
+    if (ch && !ch.classList.contains("open")) { ch.classList.add("open"); focused.classList.add("open"); }
+  } else if (e.key === "ArrowLeft" && focused.dataset.kind === "folder") {
+    const ch = focused.parentElement.querySelector(":scope > .tree-children");
+    if (ch?.classList.contains("open")) { ch.classList.remove("open"); focused.classList.remove("open"); }
+  }
+});
+
+function selectFolder(folderId) {
+  hideContextMenu();
+  searchEl.value = "";
+  searchClearBtn.classList.remove("visible");
+  clearTimeout(searchTimer);
+  clearSearchUI();
+  hideDetailView();
+  activeFolderId = folderId;
+
+  // Update active style
+  document.querySelectorAll(".tree-item.active")
+    .forEach(el => el.classList.remove("active"));
+  const item = document.querySelector(`.tree-item[data-id="${folderId}"]`);
+  if (item) item.classList.add("active");
+
+  // Breadcrumb
+  const folder = allFolders.find(f => f.id === folderId);
+  breadcrumb.textContent = folder ? buildBreadcrumbText(folderId) : "";
+
+  return loadBookmarks(folderId);
+}
+
+function buildBreadcrumbText(id) {
+  const parts = [];
+  let current = id;
+  while (current != null) {
+    const node = allFolders.find(f => f.id === current);
+    if (!node) break;
+    // Skip root wrapper
+    if (node.parent == null && allFolders.filter(f => f.parent == null).length === 1) break;
+    parts.unshift(node.title);
+    current = node.parent;
+  }
+  return parts.join("  /  ");
+}
+
+// ── Bookmarks grid ────────────────────────────────────────────────────────
+async function loadBookmarks(folderId) {
+  gridEl.innerHTML = "";
+  emptyHint.classList.add("hidden");
+
+  const bookmarks = await invoke("get_bookmarks", { folderId });
+
+  if (bookmarks.length === 0) {
+    emptyHint.classList.remove("hidden");
+    return;
+  }
+
+  for (const b of bookmarks) {
+    gridEl.appendChild(createCard(b));
+  }
+}
+
+function createCard(b) {
+  const card = document.createElement("div");
+  card.className = "card";
+  card.dataset.id    = b.id;
+  card.dataset.url   = b.url;
+  card.dataset.thumb = b.thumb || "";
+  if (b.note) card.title = b.note;
+
+  // Thumbnail
+  const thumb = document.createElement("div");
+  thumb.className = "card-thumb";
+
+  if (b.thumb) {
+    const img = document.createElement("img");
+    img.src = convertFileSrc(b.thumb);
+    img.alt = "";
+    img.onerror = () => {
+      img.remove();
+      thumb.appendChild(makeNoImg(b.title));
+    };
+    thumb.appendChild(img);
+  } else {
+    thumb.appendChild(makeNoImg(b.title));
+  }
+
+  // Body
+  const body = document.createElement("div");
+  body.className = "card-body";
+
+  const title = document.createElement("div");
+  title.className = "card-title";
+  title.textContent = b.title;
+
+  const url = document.createElement("div");
+  url.className = "card-url";
+  url.textContent = b.url;
+  url.title = b.url;
+
+  body.append(title, url);
+  card.append(thumb, body);
+  return card;
+}
+
+function makeNoImg(title) {
+  const el = document.createElement("div");
+  el.className = "no-img";
+  // Show first 2 chars of domain as placeholder
+  try {
+    el.textContent = new URL(title.startsWith("http") ? title : "http://" + title)
+      .hostname.replace(/^www\./, "").slice(0, 2).toUpperCase();
+  } catch {
+    el.textContent = (title || "?").slice(0, 2).toUpperCase();
+  }
+  return el;
+}
+
+// ── Grid interaction (navigation-first desktop UX) ────────────────────────
+function nodeFromCard(card) {
+  const found = allNodes.find(n => String(n.id) === String(card.dataset.id));
+  return found
+    ? { ...found, thumb: found.thumb || card.dataset.thumb || null }
+    : { url: card.dataset.url, id: card.dataset.id, title: "",
+        thumb: card.dataset.thumb || null };
+}
+
+function navigateToCard(node) {
+  if (node.parent != null) expandTreePath(node.parent);
+  selectTreeBookmark(node);
+  requestAnimationFrame(() => {
+    treeEl.querySelector(`.tree-item[data-id="${node.id}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  });
+}
+
+// Single click → navigate (tree + detail view), NOT open browser
+gridEl.addEventListener("click", (e) => {
+  if (e.detail >= 2) return;
+  const card = e.target.closest(".card");
+  if (!card) return;
+  gridEl.querySelectorAll(".card.selected").forEach(c => c.classList.remove("selected"));
+  card.classList.add("selected");
+  navigateToCard(nodeFromCard(card));
+});
+
+// Double click → open in browser
+gridEl.addEventListener("dblclick", (e) => {
+  const card = e.target.closest(".card");
+  if (card?.dataset.url) openWithBrowser(card.dataset.url, getDefaultBrowserPath());
+});
+
+gridEl.addEventListener("contextmenu", (e) => {
+  const card = e.target.closest(".card");
+  if (!card?.dataset.url) return;
+  gridEl.querySelectorAll(".card.selected").forEach(c => c.classList.remove("selected"));
+  card.classList.add("selected");
+  const found = allNodes.find(n => String(n.id) === String(card.dataset.id));
+  const node  = found
+    ? { ...found, thumb: found.thumb || card.dataset.thumb || null }
+    : { url: card.dataset.url, id: card.dataset.id, title: "",
+        thumb: card.dataset.thumb || null };
+  showContextMenu(e, node);
+});
+
+// ── Start ─────────────────────────────────────────────────────────────────
+buildMenubar();
+init();

@@ -1,4 +1,4 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![windows_subsystem = "windows"]
 
 mod db;
 mod importer;
@@ -8,7 +8,8 @@ use rusqlite::Connection;
 use tauri::Manager;
 
 struct AppState {
-    db: Mutex<Connection>,
+    db:      Mutex<Connection>,
+    db_path: Mutex<std::path::PathBuf>, // current active DB path; can change at runtime
 }
 
 // ── Tauri commands ───────────────────────────────────────────────────────────
@@ -102,10 +103,9 @@ fn clear_thumb(state: tauri::State<AppState>, id: i64) -> Result<(), String> {
 
 #[tauri::command]
 fn refresh_thumb(state: tauri::State<AppState>, id: i64, url: String) -> Result<String, String> {
-    let data_dir = std::env::current_exe()
-        .map_err(|e| e.to_string())?
-        .parent().ok_or("no parent dir")?
-        .join("Data");
+    let url = normalize_url(&url);
+    let data_dir = state.db_path.lock().map_err(|e| e.to_string())?
+        .parent().ok_or("no parent dir")?.to_path_buf().join("Data");
     std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
 
     let ts = std::time::SystemTime::now()
@@ -188,6 +188,7 @@ pub struct UrlCheckResult {
 
 #[tauri::command]
 async fn check_url(url: String) -> UrlCheckResult {
+    let url = normalize_url(&url);
     let t0 = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs(8);
     let client = match reqwest::Client::builder()
@@ -261,37 +262,174 @@ fn sort_all_bookmarks(state: tauri::State<AppState>, by: String, desc: bool) -> 
     Ok(())
 }
 
+// ── Database management ───────────────────────────────────────────────────────
+
 #[tauri::command]
-async fn backup_db(window: tauri::Window) -> Result<(), String> {
-    let src = std::env::current_exe().map_err(|e| e.to_string())?
-        .parent().ok_or("no parent")?.join("album.db");
+fn clear_screenshots(state: tauri::State<AppState>) -> Result<usize, String> {
+    let db_dir = state.db_path.lock().map_err(|e| e.to_string())?
+        .parent().ok_or("no parent")?.to_path_buf();
+    let data_dir = db_dir.join("Data");
+    if !data_dir.exists() { return Ok(0); }
+    let mut deleted = 0usize;
+    for entry in std::fs::read_dir(&data_dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if entry.path().extension().map(|x| x.eq_ignore_ascii_case("png")).unwrap_or(false) {
+            if std::fs::remove_file(entry.path()).is_ok() { deleted += 1; }
+        }
+    }
+    Ok(deleted)
+}
+
+#[tauri::command]
+fn clear_db(state: tauri::State<AppState>) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    conn.execute_batch(
+        "DELETE FROM nodes;
+         DELETE FROM entries WHERE 1;
+         DELETE FROM folders WHERE 1;
+         DELETE FROM sqlite_sequence WHERE name IN ('nodes','entries','folders');"
+    ).map_err(|e| e.to_string())?;
+    // VACUUM compacts the file. It may reset journal_mode, so restore WAL + synchronous after.
+    conn.execute_batch(
+        "VACUUM;
+         PRAGMA journal_mode = WAL;
+         PRAGMA synchronous  = FULL;"
+    ).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+/// Switch the active connection to a file chosen by the user.
+/// Opens in-place — no copying. The chosen file becomes the active DB.
+async fn open_db(state: tauri::State<'_, AppState>, _window: tauri::Window) -> Result<(), String> {
+    let start_dir = state.db_path.lock()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .or_else(|| std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.to_path_buf())))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    let file = rfd::AsyncFileDialog::new()
+        .set_title("Открыть базу данных")
+        .add_filter("База данных URL Album", &["db"])
+        .set_directory(&start_dir)
+        .pick_file().await.ok_or("Отменено")?;
+    let src = file.path().to_path_buf();
+
+    // Guard against opening the already-active database
+    let current = state.db_path.lock().map_err(|e| e.to_string())?.clone();
+    if std::fs::canonicalize(&src).ok() == std::fs::canonicalize(&current).ok() {
+        return Err("Выбранный файл уже является активной базой данных.".into());
+    }
+
+    switch_db(state, src)
+}
+
+/// Create a new empty database at a user-chosen path, then open it.
+#[tauri::command]
+async fn create_new_db(state: tauri::State<'_, AppState>, _window: tauri::Window) -> Result<(), String> {
+    // Default directory: folder of the current active DB, or exe folder as fallback
+    let start_dir = state.db_path.lock()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .or_else(|| std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.to_path_buf())))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    let file = rfd::AsyncFileDialog::new()
+        .set_title("Создать новую базу данных")
+        .add_filter("База данных URL Album", &["db"])
+        .set_file_name("album.db")
+        .set_directory(&start_dir)
+        .save_file().await.ok_or("Отменено")?;
+    let path = file.path().to_path_buf();
+
+    // Create and initialise the new empty file
+    let new_conn = Connection::open(&path).map_err(|e| e.to_string())?;
+    db::init(&new_conn).map_err(|e| e.to_string())?;
+    // Close it so switch_db can reopen cleanly
+    drop(new_conn);
+
+    switch_db(state, path)
+}
+
+// ── Last-used DB persistence (portable: last_db.txt next to exe) ─────────────
+
+fn last_db_file() -> Option<std::path::PathBuf> {
+    Some(std::env::current_exe().ok()?.parent()?.join("last_db.txt"))
+}
+
+fn save_last_db(path: &std::path::Path) {
+    if let Some(f) = last_db_file() {
+        std::fs::write(f, path.to_string_lossy().as_bytes()).ok();
+    }
+}
+
+fn load_last_db() -> Option<std::path::PathBuf> {
+    let content = std::fs::read_to_string(last_db_file()?).ok()?;
+    let p = std::path::PathBuf::from(content.trim());
+    if p.exists() { Some(p) } else { None }
+}
+
+/// Internal: checkpoint current connection, open a new one at `new_path`, update AppState.
+fn switch_db(state: tauri::State<'_, AppState>, new_path: std::path::PathBuf) -> Result<(), String> {
+    let mut db_guard = state.db.lock().map_err(|e| e.to_string())?;
+    // Checkpoint WAL of current DB before switching
+    db_guard.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)").ok();
+
+    let new_conn = Connection::open(&new_path).map_err(|e| e.to_string())?;
+    db::init(&new_conn).map_err(|e| e.to_string())?;
+    *db_guard = new_conn;
+    drop(db_guard);
+
+    let mut path_guard = state.db_path.lock().map_err(|e| e.to_string())?;
+    *path_guard = new_path.clone();
+    save_last_db(&new_path);
+    Ok(())
+}
+
+#[tauri::command]
+async fn backup_db(state: tauri::State<'_, AppState>, window: tauri::Window) -> Result<(), String> {
+    let (src, src_dir, src_name) = {
+        let p = state.db_path.lock().map_err(|e| e.to_string())?.clone();
+        let dir = p.parent().ok_or("no parent")?.to_path_buf();
+        let name = p.file_name().ok_or("no filename")?.to_string_lossy().into_owned();
+        (p, dir, name)
+    };
     let file = rfd::AsyncFileDialog::new()
         .set_parent(&window)
         .set_title("Сохранить резервную копию базы")
         .add_filter("База данных", &["db"])
+        .set_file_name(&src_name)
+        .set_directory(&src_dir)
         .save_file().await.ok_or("Отменено")?;
     std::fs::copy(&src, file.path()).map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
-async fn backup_db_with_data(window: tauri::Window) -> Result<(), String> {
-    let file = rfd::AsyncFileDialog::new()
+async fn backup_db_with_data(state: tauri::State<'_, AppState>, window: tauri::Window) -> Result<(), String> {
+    let (db_src, db_dir, db_name) = {
+        let p = state.db_path.lock().map_err(|e| e.to_string())?.clone();
+        let dir = p.parent().ok_or("no parent")?.to_path_buf();
+        let name = p.file_name().ok_or("no filename")?.to_string_lossy().into_owned();
+        (p, dir, name)
+    };
+    let dest_folder = rfd::AsyncFileDialog::new()
         .set_parent(&window)
         .set_title("Выбрать папку для резервной копии")
+        .set_directory(&db_dir)
         .pick_folder().await.ok_or("Отменено")?;
-    let dir = file.path().to_path_buf();
-    let exe_dir = std::env::current_exe().map_err(|e| e.to_string())?
-        .parent().ok_or("no parent")?.to_path_buf();
-    std::fs::copy(exe_dir.join("album.db"), dir.join("album.db"))
-        .map_err(|e| e.to_string())?;
-    let data_src = exe_dir.join("Data");
+    let dest = dest_folder.path().to_path_buf();
+
+    // Copy the DB file itself
+    std::fs::copy(&db_src, dest.join(&db_name)).map_err(|e| e.to_string())?;
+
+    // Copy the Data folder (screenshots) that sits next to the DB
+    let data_src = db_dir.join("Data");
     if data_src.exists() {
-        let data_dst = dir.join("Data");
+        let data_dst = dest.join("Data");
         std::fs::create_dir_all(&data_dst).map_err(|e| e.to_string())?;
-        for e in std::fs::read_dir(&data_src).map_err(|e| e.to_string())? {
-            let e = e.map_err(|e| e.to_string())?;
-            std::fs::copy(e.path(), data_dst.join(e.file_name()))
+        for entry in std::fs::read_dir(&data_src).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            std::fs::copy(entry.path(), data_dst.join(entry.file_name()))
                 .map_err(|e| e.to_string())?;
         }
     }
@@ -412,13 +550,132 @@ fn db_stats(state: tauri::State<AppState>) -> Result<String, String> {
     Ok(format!("total={total} folders={folders} bookmarks={books} orphan_bookmarks={orphans}"))
 }
 
+// ── Favicon helpers ──────────────────────────────────────────────────────────
+
+fn extract_domain(url: &str) -> Option<String> {
+    let url = url.trim();
+    let after_scheme = if let Some(pos) = url.find("://") {
+        &url[pos + 3..]
+    } else {
+        url
+    };
+    let host = after_scheme.split(|c: char| c == '/' || c == '?' || c == '#').next()?;
+    let host = host.split('@').last().unwrap_or(host);
+    let host = host.split(':').next().unwrap_or(host).trim().to_lowercase();
+    if host.is_empty() { return None; }
+    Some(host.strip_prefix("www.").unwrap_or(&host).to_string())
+}
+
+fn sanitize_domain(domain: &str) -> String {
+    domain.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
+        .collect::<String>()
+        .to_lowercase()
+}
+
+fn ext_from_content_type(ct: &str) -> &'static str {
+    if ct.contains("svg")       { "svg"  }
+    else if ct.contains("png")  { "png"  }
+    else if ct.contains("gif")  { "gif"  }
+    else if ct.contains("webp") { "webp" }
+    else                        { "ico"  }
+}
+
+fn find_icon_href(html: &str, base: &str) -> Option<String> {
+    let lower = html.to_lowercase();
+    let mut pos = 0;
+    while pos < lower.len() {
+        let Some(offset) = lower[pos..].find("<link") else { break };
+        let link_start = pos + offset;
+        let end_offset = lower[link_start..].find('>').unwrap_or(0);
+        let link_end   = link_start + end_offset + 1;
+        let tag_lower  = &lower[link_start..link_end];
+        let tag_orig   = &html[link_start..link_end.min(html.len())];
+
+        if (tag_lower.contains("rel=\"icon\"")
+            || tag_lower.contains("rel='icon'")
+            || tag_lower.contains("shortcut icon")
+            || tag_lower.contains("apple-touch-icon"))
+            && tag_lower.contains("href=")
+        {
+            if let Some(href) = attr_value(tag_orig, "href") {
+                if !href.is_empty() {
+                    return Some(resolve_href(&href, base));
+                }
+            }
+        }
+        pos = link_end;
+    }
+    None
+}
+
+fn attr_value(tag: &str, attr: &str) -> Option<String> {
+    let ltag  = tag.to_lowercase();
+    let lattr = attr.to_lowercase();
+    let dq = format!("{}=\"", lattr);
+    if let Some(s) = ltag.find(&dq) {
+        let vs = s + dq.len();
+        if let Some(e) = ltag[vs..].find('"') {
+            return Some(tag[vs..vs + e].to_string());
+        }
+    }
+    let sq = format!("{}='", lattr);
+    if let Some(s) = ltag.find(&sq) {
+        let vs = s + sq.len();
+        if let Some(e) = ltag[vs..].find('\'') {
+            return Some(tag[vs..vs + e].to_string());
+        }
+    }
+    None
+}
+
+fn resolve_href(href: &str, base: &str) -> String {
+    if href.starts_with("http://") || href.starts_with("https://") {
+        href.to_string()
+    } else if href.starts_with("//") {
+        format!("https:{}", href)
+    } else if href.starts_with('/') {
+        format!("{}{}", base, href)
+    } else {
+        format!("{}/{}", base.trim_end_matches('/'), href)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Add https:// if the URL has no scheme. Never modifies the DB value.
+fn normalize_url(url: &str) -> String {
+    let url = url.trim();
+    if url.is_empty() { return url.to_string(); }
+    // Already has a recognised scheme — leave as-is
+    let low = url.to_ascii_lowercase();
+    if low.starts_with("http://")
+        || low.starts_with("https://")
+        || low.starts_with("ftp://")
+        || low.starts_with("ftps://")
+        || low.starts_with("file://")
+        || low.starts_with("mailto:")
+        || low.starts_with("tel:")
+        || low.starts_with("data:")
+    {
+        return url.to_string();
+    }
+    format!("https://{}", url)
+}
+
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
+    let url = normalize_url(&url);
     #[cfg(windows)]
-    std::process::Command::new("cmd")
-        .args(["/c", "start", "", &url])
-        .spawn()
-        .map_err(|e| e.to_string())?;
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        std::process::Command::new("cmd")
+            .args(["/c", "start", "", &url])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
     #[cfg(target_os = "macos")]
     std::process::Command::new("open").arg(&url).spawn().map_err(|e| e.to_string())?;
     #[cfg(target_os = "linux")]
@@ -428,6 +685,7 @@ fn open_url(url: String) -> Result<(), String> {
 
 #[tauri::command]
 fn open_url_with(url: String, browser: String) -> Result<(), String> {
+    let url = normalize_url(&url);
     if browser == "default" {
         return open_url(url);
     }
@@ -485,6 +743,41 @@ fn save_toolbar_config(json: String) -> Result<(), String> {
     std::fs::write(path, json.as_bytes()).map_err(|e| e.to_string())
 }
 
+// ── Move node (drag & drop) ──────────────────────────────────────────────────
+
+#[tauri::command]
+fn move_node(state: tauri::State<AppState>, id: i64, new_parent: i64) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    // Guard: cannot move into self
+    if id == new_parent {
+        return Err("Cannot move a folder into itself".into());
+    }
+
+    // Guard: circular reference — walk up from new_parent, reject if we hit id
+    let mut cur_opt: Option<i64> = Some(new_parent);
+    while let Some(cur) = cur_opt {
+        if cur == id { return Err("Circular reference detected".into()); }
+        cur_opt = conn
+            .query_row("SELECT parent FROM nodes WHERE id = ?1", [cur], |r| r.get::<_, Option<i64>>(0))
+            .ok()
+            .flatten();
+    }
+
+    // Place at end of new parent's children
+    let max: i64 = conn.query_row(
+        "SELECT COALESCE(MAX(sort_idx), -1) FROM nodes WHERE parent = ?1",
+        [new_parent], |r| r.get(0),
+    ).unwrap_or(-1);
+
+    conn.execute(
+        "UPDATE nodes SET parent = ?1, sort_idx = ?2 WHERE id = ?3",
+        rusqlite::params![new_parent, max + 1, id],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 // ── Sort index ───────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -511,14 +804,44 @@ fn create_folder(state: tauri::State<AppState>, parent_id: Option<i64>, title: S
 }
 
 #[tauri::command]
-fn create_bookmark(state: tauri::State<AppState>, parent_id: i64, title: String, url: String) -> Result<i64, String> {
+fn create_bookmark(
+    state: tauri::State<AppState>,
+    parent_id: i64,
+    title: String,
+    url: String,
+    note: Option<String>,
+) -> Result<i64, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let max: i64 = conn.query_row(
         "SELECT COALESCE(MAX(sort_idx),-1) FROM nodes WHERE parent=?1", [parent_id], |r| r.get(0)
     ).unwrap_or(-1);
-    conn.execute("INSERT INTO nodes (parent,kind,title,url,sort_idx) VALUES(?1,'bookmark',?2,?3,?4)",
-        rusqlite::params![parent_id, title, url, max+1]).map_err(|e| e.to_string())?;
+    let note_val: Option<String> = note.filter(|s| !s.trim().is_empty());
+    conn.execute(
+        "INSERT INTO nodes (parent,kind,title,url,note,sort_idx) VALUES(?1,'bookmark',?2,?3,?4,?5)",
+        rusqlite::params![parent_id, title, url, note_val, max + 1],
+    ).map_err(|e| e.to_string())?;
     Ok(conn.last_insert_rowid())
+}
+
+// ── DB utilities ─────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn get_db_path(state: tauri::State<AppState>) -> String {
+    state.db_path.lock()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn set_window_title(window: tauri::Window, title: String) {
+    window.set_title(&title).ok();
+}
+
+/// Force WAL checkpoint — incorporate all WAL data into the main DB file.
+#[tauri::command]
+fn checkpoint_db(state: tauri::State<AppState>) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    conn.execute_batch("PRAGMA wal_checkpoint(FULL)").map_err(|e| e.to_string())
 }
 
 // ── Browser detection ────────────────────────────────────────────────────────
@@ -725,9 +1048,13 @@ struct BrowserExe { name: String, path: String }
 fn exe_exists(path: &str) -> bool { std::path::Path::new(path).exists() }
 
 fn reg_query_cmd(key: &str) -> Option<String> {
-    let out = std::process::Command::new("reg")
-        .args(["query", key, "/ve"])
-        .output().ok()?;
+    #[cfg(windows)]
+    use std::os::windows::process::CommandExt;
+    #[allow(unused_mut)]
+    let mut cmd = std::process::Command::new("reg");
+    cmd.args(["query", key, "/ve"]);
+    #[cfg(windows)] cmd.creation_flags(0x0800_0000);
+    let out = cmd.output().ok()?;
     if !out.status.success() { return None; }
     let s = String::from_utf8_lossy(&out.stdout);
     for line in s.lines() {
@@ -790,9 +1117,12 @@ fn detect_opera_exe(local: &str, pf: &str, pf86: &str) -> Option<String> {
 
     // 5. Last resort: HKCU Opera Software key
     if let Some(out) = (|| -> Option<String> {
-        let o = std::process::Command::new("reg")
-            .args(["query", r"HKCU\SOFTWARE\Opera Software", "/v", "Last Install dir"])
-            .output().ok()?;
+        #[cfg(windows)] use std::os::windows::process::CommandExt;
+        #[allow(unused_mut)]
+        let mut cmd = std::process::Command::new("reg");
+        cmd.args(["query", r"HKCU\SOFTWARE\Opera Software", "/v", "Last Install dir"]);
+        #[cfg(windows)] cmd.creation_flags(0x0800_0000);
+        let o = cmd.output().ok()?;
         let s = String::from_utf8_lossy(&o.stdout);
         for line in s.lines() {
             if line.contains("Last Install dir") {
@@ -1006,21 +1336,27 @@ async fn import_uadat_pick(state: tauri::State<'_, AppState>, window: tauri::Win
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
-            // Portable mode: store album.db next to the executable so the
-            // entire folder can be moved and everything keeps working.
+            // Portable mode: all files live next to the executable.
             let exe_dir = std::env::current_exe()?
                 .parent()
                 .expect("exe has no parent dir")
                 .to_path_buf();
 
-            let db_path = exe_dir.join("album.db");
+            // Resume last session if the file still exists, else fall back to album.db.
+            let db_path = load_last_db()
+                .unwrap_or_else(|| exe_dir.join("album.db"));
+
             let conn = Connection::open(&db_path)
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
             db::init(&conn)
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
 
+            // Persist the resolved path so the next startup knows what was open.
+            save_last_db(&db_path);
+
             app.manage(AppState {
-                db: Mutex::new(conn),
+                db:      Mutex::new(conn),
+                db_path: Mutex::new(db_path),
             });
 
             Ok(())
@@ -1066,6 +1402,10 @@ fn main() {
             find_bookmarks_in_folder,
             import_from_bookmarks_file,
             save_text_file,
+            clear_screenshots,
+            clear_db,
+            open_db,
+            move_node,
             set_sort_idx,
             load_settings,
             save_settings,
@@ -1073,7 +1413,19 @@ fn main() {
             save_toolbar_config,
             create_folder,
             create_bookmark,
+            create_new_db,
+            get_db_path,
+            set_window_title,
+            checkpoint_db,
         ])
+        .on_window_event(|_window, event| {
+            // Checkpoint WAL into main file on every window close so data
+            // is always fully persisted even if the OS doesn't flush.
+            if let tauri::WindowEvent::Destroyed = event {
+                // AppState is already dropped by this point; checkpoint happens
+                // automatically via rusqlite Connection::drop → sqlite3_close.
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

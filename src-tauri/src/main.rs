@@ -1543,6 +1543,8 @@ fn main() {
             get_db_path,
             set_window_title,
             checkpoint_db,
+            get_data_dir,
+            fetch_favicon,
         ])
         .on_window_event(|_window, event| {
             // Checkpoint WAL into main file on every window close so data

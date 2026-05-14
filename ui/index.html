@@ -11,19 +11,45 @@
   <div id="menubar"></div><!-- populated by JS -->
   <div id="toolbar" class="hidden"></div><!-- populated by JS -->
 
-  <!-- Import screen (shown when DB is empty) -->
+  <!-- Welcome / first-run screen (shown when DB is empty) -->
   <div id="import-screen">
     <div id="import-box">
       <div id="import-logo">URL Album</div>
-      <p>Импортируйте ваш ua.dat для начала работы.</p>
-      <input
-        type="text"
-        id="dat-path"
-        placeholder="Путь к ua.dat или ua.dat.bak"
-        spellcheck="false"
-      >
-      <button id="import-btn">Импортировать</button>
-      <div id="import-status"></div>
+
+      <!-- Three start options -->
+      <div id="welcome-actions">
+        <button class="wb-btn" id="wb-new">
+          <svg class="wb-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+          <span class="wb-text">
+            <span class="wb-title">Создать новую базу</span>
+            <span class="wb-desc">Начать с пустой коллекцией</span>
+          </span>
+        </button>
+        <button class="wb-btn" id="wb-import">
+          <svg class="wb-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v8M5 7l3 3 3-3M2 12h12"/></svg>
+          <span class="wb-text">
+            <span class="wb-title">Импортировать ua.dat</span>
+            <span class="wb-desc">Перенести данные из классического URL Album</span>
+          </span>
+        </button>
+        <button class="wb-btn" id="wb-open">
+          <svg class="wb-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5h4.5l1.5 2H14V12H2V4.5z"/></svg>
+          <span class="wb-text">
+            <span class="wb-title">Открыть существующую базу</span>
+            <span class="wb-desc">Открыть файл album.db</span>
+          </span>
+        </button>
+      </div>
+
+      <!-- ua.dat import form (hidden, expands on click) -->
+      <div id="import-form" class="hidden">
+        <input type="text" id="dat-path" placeholder="Путь к ua.dat или ua.dat.bak" spellcheck="false">
+        <div class="import-form-row">
+          <button id="import-btn">Импортировать</button>
+          <button id="import-back">← Назад</button>
+        </div>
+        <div id="import-status"></div>
+      </div>
     </div>
   </div>
 
@@ -31,12 +57,10 @@
   <div id="app" class="hidden">
 
     <div id="sidebar">
-      <div id="sidebar-title">
-        <span>URL Album</span>
-        <button id="theme-btn" title="Переключить тему"></button>
-      </div>
       <nav id="tree"></nav>
     </div>
+
+    <div id="splitter"></div>
 
     <div id="main">
       <div id="breadcrumb"></div>
@@ -45,11 +69,23 @@
         <input type="text" id="search" autocomplete="off" spellcheck="false">
         <button id="search-clear">✕</button>
       </div>
+      <div id="list-header">
+        <span class="lh-dot-ph"></span>
+        <span class="lh-name">Название</span>
+        <span class="col-resizer" id="col-resizer"></span>
+        <span class="lh-addr">Адрес</span>
+      </div>
       <div id="grid"></div>
       <div id="search-results" class="hidden"></div>
       <div id="empty-hint" class="hidden">Нет закладок в этой папке.</div>
 
-      <!-- Single-bookmark detail view -->
+      <!-- Compact info bar — shown on single-click selection, grid stays visible -->
+      <div id="info-bar" class="hidden">
+        <div id="info-bar-url"></div>
+        <div id="info-bar-note"></div>
+      </div>
+
+      <!-- Full viewer — shown on double-click only, replaces grid -->
       <div id="detail-view" class="hidden">
         <div id="detail-thumb-wrap">
           <img id="detail-img" src="" alt="">
@@ -60,10 +96,13 @@
         </div>
         <div id="detail-footer">
           <div id="detail-url-row">
+            <img id="detail-favicon" class="favicon-icon hidden" src="" alt="">
             <span id="detail-url"></span>
             <button id="detail-open-btn" title="Открыть в браузере">↗</button>
           </div>
-          <div id="detail-note"></div>
+          <div id="detail-note-section">
+            <div id="detail-note"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -107,16 +146,9 @@
         <div class="props-sep"></div>
         <div class="form-row"><label class="form-label">Рисунок</label>
           <span class="props-ro form-field" id="props-thumb" title=""></span></div>
-        <div class="form-row"><label class="form-label">Добавлен</label>
-          <span class="props-ro" id="props-created"></span></div>
-        <div class="form-row"><label class="form-label">Посещён</label>
-          <span class="props-ro" id="props-visited"></span></div>
-        <div class="form-row"><label class="form-label">ID</label>
-          <span class="props-ro props-mono" id="props-id"></span></div>
       </div>
       <div class="dlg-footer">
         <button class="win-btn win-btn-default" id="props-ok">OK</button>
-        <button class="win-btn" id="props-apply">Применить</button>
         <button class="win-btn" id="props-cancel">Отмена</button>
       </div>
     </div>
@@ -139,14 +171,9 @@
           <span class="props-ro" id="fprops-folders"></span></div>
         <div class="form-row"><label class="form-label">Путь</label>
           <span class="props-ro props-path" id="fprops-path"></span></div>
-        <div class="form-row"><label class="form-label">Добавлен</label>
-          <span class="props-ro" id="fprops-created"></span></div>
-        <div class="form-row"><label class="form-label">ID</label>
-          <span class="props-ro props-mono" id="fprops-id"></span></div>
       </div>
       <div class="dlg-footer">
         <button class="win-btn win-btn-default" id="fprops-ok">OK</button>
-        <button class="win-btn" id="fprops-apply">Применить</button>
         <button class="win-btn" id="fprops-cancel">Отмена</button>
       </div>
     </div>
@@ -266,10 +293,9 @@
         </div>
       </div>
       <div class="dlg-footer">
-        <button class="win-btn" id="dupes-del-one"  disabled>Удалить выбранный</button>
-        <button class="win-btn" id="dupes-keep-one" disabled>Оставить один</button>
-        <button class="win-btn" id="dupes-export"   disabled>Экспорт</button>
         <div style="flex:1"></div>
+        <button class="win-btn" id="dupes-del-one"  disabled>Удалить выбранный</button>
+        <button class="win-btn" id="dupes-keep-one" disabled>Оставить одну ссылку</button>
         <button class="win-btn" id="dupes-close-btn">Закрыть</button>
       </div>
     </div>
@@ -318,6 +344,10 @@
             <label class="settings-row">
               <input type="checkbox" id="s-no-dupes"> Запретить повторяющиеся ссылки
             </label>
+            <div class="settings-row" style="margin-top:6px;flex-direction:column;align-items:flex-start;gap:2px">
+              <span style="font-size:10px;color:var(--text-dim)">Файл базы данных:</span>
+              <span id="s-db-path" style="font-size:10px;font-family:monospace;color:var(--text);word-break:break-all;user-select:all"></span>
+            </div>
           </div>
         </div>
 
@@ -379,9 +409,28 @@
     </div>
   </div>
 
+  <!-- Open database dialog -->
+  <div id="open-db-overlay" class="dlg-overlay hidden">
+    <div class="win-dlg" style="width:300px">
+      <div class="dlg-title">
+        <span>Открыть базу данных</span>
+        <button class="dlg-close" id="open-db-x">×</button>
+      </div>
+      <div class="dlg-body" style="padding:14px 14px 8px">
+        <div style="font-size:12px;margin-bottom:8px">Выберите файл базы данных (album.db).</div>
+        <div style="font-size:11px;color:#888">Текущие данные будут заменены содержимым выбранного файла.</div>
+        <div id="open-db-err" style="font-size:11px;color:#c00;margin-top:8px;min-height:14px"></div>
+      </div>
+      <div class="dlg-footer">
+        <button class="win-btn win-btn-default" id="open-db-ok">Выбрать файл…</button>
+        <button class="win-btn" id="open-db-cancel">Отмена</button>
+      </div>
+    </div>
+  </div>
+
   <!-- New folder / new link dialog -->
   <div id="new-item-overlay" class="dlg-overlay hidden">
-    <div class="win-dlg" style="width:310px">
+    <div class="win-dlg" style="width:340px">
       <div class="dlg-title">
         <span id="new-item-dlg-title">Новая папка</span>
         <button class="dlg-close" id="new-item-x">×</button>
@@ -394,6 +443,11 @@
         <div id="new-item-url-row" class="form-row">
           <label class="form-label">Адрес</label>
           <input class="dlg-input form-field" id="new-item-url" type="text" autocomplete="off" spellcheck="false">
+        </div>
+        <div id="new-item-note-row" class="form-row" style="align-items:flex-start">
+          <label class="form-label" style="padding-top:3px">Заметка</label>
+          <textarea class="dlg-input form-field" id="new-item-note" rows="3"
+            spellcheck="false" style="resize:vertical;min-height:52px"></textarea>
         </div>
       </div>
       <div id="new-item-warn" class="new-item-warn hidden"></div>
@@ -418,16 +472,15 @@
           <button class="win-btn tbc-full" id="tbc-add-sep">+ Разделитель</button>
         </div>
         <div class="tbc-mid">
-          <button class="win-btn tbc-arrow" id="tbc-add-btn" disabled>→</button>
-          <button class="win-btn tbc-arrow" id="tbc-rem-btn" disabled>←</button>
+          <button class="win-btn tbc-arrow" id="tbc-add-btn" disabled title="Добавить в toolbar">▶</button>
+          <button class="win-btn tbc-arrow" id="tbc-rem-btn" disabled title="Убрать из toolbar">◀</button>
         </div>
         <div class="tbc-col">
           <div class="tbc-lbl">Toolbar:</div>
           <div class="dlg-listbox-wrap" id="tbc-active"></div>
           <div class="tbc-row3">
-            <button class="win-btn" id="tbc-up"   disabled>↑</button>
-            <button class="win-btn" id="tbc-down" disabled>↓</button>
-            <button class="win-btn" id="tbc-del"  disabled>✕</button>
+            <button class="win-btn" id="tbc-up"   disabled title="Вверх">▲</button>
+            <button class="win-btn" id="tbc-down" disabled title="Вниз">▼</button>
           </div>
         </div>
       </div>
@@ -436,6 +489,24 @@
         <div style="flex:1"></div>
         <button class="win-btn win-btn-default" id="tbc-ok">OK</button>
         <button class="win-btn" id="tbc-cancel">Отмена</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Favicon loader panel (non-modal background task) -->
+  <div id="favicon-panel" class="hidden">
+    <div id="fv-titlebar">
+      <span id="fv-title">Загрузка favicon</span>
+      <button id="fv-close-btn" title="Закрыть">×</button>
+    </div>
+    <div id="fv-body">
+      <div id="fv-info-row">
+        <span>favicon: <b id="fv-done">0</b>/<b id="fv-total">0</b></span>
+        <span id="fv-domain"></span>
+      </div>
+      <div id="fv-bar-track"><div id="fv-bar-fill"></div></div>
+      <div id="fv-btn-row">
+        <button class="win-btn" id="fv-cancel-btn">Отмена</button>
       </div>
     </div>
   </div>

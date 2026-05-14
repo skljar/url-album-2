@@ -4043,6 +4043,82 @@ function setFaviconOnEl(el, src) {
   el.appendChild(img);
 }
 
+// ── Favicon queue engine ──────────────────────────────────────────────────
+
+function updateFaviconInDOM(nodeId, filePath) {
+  const src = convertFileSrc(filePath);
+
+  // Grid row
+  const card = gridEl.querySelector(`.card[data-id="${nodeId}"]`);
+  if (card) {
+    const dot = card.querySelector('.row-dot');
+    if (dot) setFaviconOnEl(dot, src);
+  }
+
+  // Tree leaf
+  const treeItem = treeEl.querySelector(`.tree-item[data-id="${nodeId}"]`);
+  if (treeItem) {
+    const icon = treeItem.querySelector('.tree-link-icon');
+    if (icon) setFaviconOnEl(icon, src);
+  }
+
+  // Detail view (if this node is active)
+  if (activeBookmarkNode?.id === nodeId) {
+    const detailFav = document.getElementById('detail-favicon');
+    if (detailFav) {
+      detailFav.src = src;
+      detailFav.classList.remove('hidden');
+      detailFav.onerror = () => detailFav.classList.add('hidden');
+    }
+  }
+}
+
+function applyFaviconToDOM(item, filename) {
+  const filePath = dataDir + '/favicons/' + filename;
+
+  const primary = allNodes.find(n => n.id === item.id);
+  if (primary) primary.favicon = filename;
+
+  for (const sid of item.sameIds) {
+    const sn = allNodes.find(n => n.id === sid);
+    if (sn) sn.favicon = filename;
+    updateFaviconInDOM(sid, filePath);
+  }
+
+  updateFaviconInDOM(item.id, filePath);
+}
+
+function _runFaviconWorker() {
+  if (_faviconCancelled || _faviconQueue.length === 0 || _faviconActive >= MAX_FAVICON_CONCURRENCY) return;
+  _faviconActive++;
+  const item = _faviconQueue.shift();
+
+  const domainEl = document.getElementById('fv-domain');
+  if (domainEl) domainEl.textContent = item.domain;
+
+  invoke('fetch_favicon', { id: item.id, url: item.url })
+    .then(filename => {
+      if (filename) applyFaviconToDOM(item, filename);
+    })
+    .catch(() => {})
+    .finally(() => {
+      _faviconDone++;
+      _faviconActive--;
+      _updateFaviconPanelProgress();
+      if (_faviconQueue.length === 0 && _faviconActive === 0) {
+        _finishFaviconBatch();
+      } else {
+        _runFaviconWorker();
+      }
+    });
+}
+
+function startFaviconWorkers() {
+  for (let i = 0; i < MAX_FAVICON_CONCURRENCY; i++) _runFaviconWorker();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 function makeNoImg(title) {
   const el = document.createElement("div");
   el.className = "no-img";

@@ -905,6 +905,10 @@ function showFolderContextMenu(e, folderNode) {
     hideContextMenu();
     openCheckerPanel(folderNode);
   }));
+  ctxMenuEl.appendChild(ctxItem("favicon", "Загрузить favicon'ы", null, () => {
+    hideContextMenu();
+    startFaviconBatch(folderNode, true);
+  }));
   ctxMenuEl.appendChild(ctxItem("edit", "Переименовать", "F2", () => {
     hideContextMenu();
     startInlineRename(folderNode.id);
@@ -1494,6 +1498,11 @@ function showContextMenu(e, node) {
   ctxMenuEl.appendChild(
     ctxItem("refresh", "Обновить рисунок", null,
       () => refreshThumb(node), !node.url)   // active whenever there's a URL
+  );
+  ctxMenuEl.appendChild(
+    ctxItem("favicon", "Загрузить favicon", null,
+      () => { hideContextMenu(); loadSingleFavicon(node); },
+      !node.url)
   );
   ctxMenuEl.appendChild(
     ctxItem("delimg",  "Удалить рисунок",  null,

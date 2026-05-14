@@ -13,6 +13,7 @@ pub struct TreeNode {
     pub title:   String,
     pub url:     Option<String>,
     pub thumb:   Option<String>,
+    pub favicon: Option<String>,
     pub note:    Option<String>,
     pub created: Option<String>,
     pub visited: Option<String>,
@@ -21,11 +22,12 @@ pub struct TreeNode {
 
 #[derive(Serialize)]
 pub struct Bookmark {
-    pub id: i64,
-    pub title: String,
-    pub url: String,
-    pub thumb: Option<String>,
-    pub note: Option<String>,
+    pub id:     i64,
+    pub title:  String,
+    pub url:    String,
+    pub thumb:  Option<String>,
+    pub favicon: Option<String>,
+    pub note:   Option<String>,
 }
 
 // ── Schema ──────────────────────────────────────────────────────────────────
@@ -33,6 +35,8 @@ pub struct Bookmark {
 pub fn init(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "PRAGMA journal_mode = WAL;
+         PRAGMA synchronous  = FULL;
+         PRAGMA wal_checkpoint(PASSIVE);
          CREATE TABLE IF NOT EXISTS nodes (
              id       INTEGER PRIMARY KEY AUTOINCREMENT,
              parent   INTEGER,
@@ -47,16 +51,21 @@ pub fn init(conn: &Connection) -> Result<()> {
          );
          CREATE INDEX IF NOT EXISTS idx_parent
              ON nodes (parent, kind, sort_idx);",
-    )
+    )?;
+    // Migration: add favicon column if absent (silent on existing DBs)
+    conn.execute("ALTER TABLE nodes ADD COLUMN favicon TEXT", []).ok();
+    Ok(())
 }
 
 #[derive(Serialize)]
 pub struct SearchResult {
     pub id:     i64,
     pub parent: Option<i64>,
+    pub kind:   String,
     pub title:  String,
     pub url:    String,
     pub thumb:  Option<String>,
+    pub favicon: Option<String>,
     pub note:   Option<String>,
 }
 
@@ -70,7 +79,7 @@ pub fn is_empty(conn: &Connection) -> bool {
 
 pub fn get_tree(conn: &Connection) -> Result<Vec<TreeNode>> {
     let mut stmt = conn.prepare(
-        "SELECT id, parent, kind, title, url, thumb, note, created, visited,
+        "SELECT id, parent, kind, title, url, thumb, note, created, visited, favicon,
                 CASE WHEN kind = 'folder'
                      THEN (SELECT COUNT(*) FROM nodes b
                            WHERE b.parent = nodes.id AND b.kind = 'bookmark')
@@ -90,7 +99,8 @@ pub fn get_tree(conn: &Connection) -> Result<Vec<TreeNode>> {
             note:    row.get(6)?,
             created: row.get(7)?,
             visited: row.get(8)?,
-            count:   row.get(9)?,
+            favicon: row.get(9)?,
+            count:   row.get(10)?,
         })
     })?.collect();
     result
@@ -98,18 +108,19 @@ pub fn get_tree(conn: &Connection) -> Result<Vec<TreeNode>> {
 
 pub fn get_bookmarks(conn: &Connection, folder_id: i64) -> Result<Vec<Bookmark>> {
     let mut stmt = conn.prepare(
-        "SELECT id, title, url, thumb, note
+        "SELECT id, title, url, thumb, note, favicon
          FROM nodes
          WHERE kind = 'bookmark' AND parent = ?1
          ORDER BY sort_idx, id",
     )?;
     let result: rusqlite::Result<Vec<Bookmark>> = stmt.query_map(params![folder_id], |row| {
         Ok(Bookmark {
-            id:    row.get(0)?,
-            title: row.get(1)?,
-            url:   row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-            thumb: row.get(3)?,
-            note:  row.get(4)?,
+            id:     row.get(0)?,
+            title:  row.get(1)?,
+            url:    row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+            thumb:  row.get(3)?,
+            note:   row.get(4)?,
+            favicon: row.get(5)?,
         })
     })?.collect();
     result
@@ -122,30 +133,43 @@ pub fn search_bookmarks(
     by_url: bool,
     by_note: bool,
 ) -> Result<Vec<SearchResult>> {
-    let mut conds: Vec<&str> = Vec::new();
-    if by_title { conds.push("title LIKE ?1"); }
-    if by_url   { conds.push("url   LIKE ?1"); }
-    if by_note  { conds.push("note  LIKE ?1"); }
-    if conds.is_empty() { return Ok(vec![]); }
-
     let pattern = format!("%{query}%");
-    let sql = format!(
-        "SELECT id, parent, title, url, thumb, note
+
+    // Bookmark conditions (title/url/note)
+    let mut bm_conds: Vec<&str> = Vec::new();
+    if by_title { bm_conds.push("title LIKE ?1"); }
+    if by_url   { bm_conds.push("url   LIKE ?1"); }
+    if by_note  { bm_conds.push("note  LIKE ?1"); }
+
+    // Always search folders by name; bookmarks by the chosen fields.
+    let sql = if bm_conds.is_empty() {
+        "SELECT id, parent, kind, title, url, thumb, note, favicon
          FROM nodes
-         WHERE kind = 'bookmark' AND ({})
-         ORDER BY title",
-        conds.join(" OR ")
-    );
+         WHERE kind = 'folder' AND title LIKE ?1
+         ORDER BY title".to_string()
+    } else {
+        format!(
+            "SELECT id, parent, kind, title, url, thumb, note, favicon
+             FROM nodes
+             WHERE (kind = 'folder' AND title LIKE ?1)
+                OR (kind = 'bookmark' AND ({bm}))
+             ORDER BY CASE kind WHEN 'folder' THEN 0 ELSE 1 END, title",
+            bm = bm_conds.join(" OR ")
+        )
+    };
+
     let mut stmt = conn.prepare(&sql)?;
     let result: rusqlite::Result<Vec<SearchResult>> = stmt.query_map(
         rusqlite::params![pattern],
         |row| Ok(SearchResult {
-            id:    row.get(0)?,
+            id:     row.get(0)?,
             parent: row.get(1)?,
-            title: row.get(2)?,
-            url:   row.get::<_, Option<String>>(3)?.unwrap_or_default(),
-            thumb: row.get(4)?,
-            note:  row.get(5)?,
+            kind:   row.get(2)?,
+            title:  row.get(3)?,
+            url:    row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+            thumb:  row.get(5)?,
+            note:   row.get(6)?,
+            favicon: row.get(7)?,
         }),
     )?.collect();
     result

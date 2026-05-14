@@ -388,6 +388,45 @@ document.getElementById("chk-collapse").onclick = () => {
     chkBody.classList.contains("hidden") ? "□" : "─";
 };
 
+// ── Favicon panel ─────────────────────────────────────────────────────────
+
+function showFaviconPanel(total) {
+  _faviconTotal = total;
+  _faviconDone  = 0;
+  document.getElementById('fv-done').textContent  = '0';
+  document.getElementById('fv-total').textContent = total;
+  document.getElementById('fv-bar-fill').style.width = '0%';
+  document.getElementById('fv-domain').textContent   = '';
+  document.getElementById('favicon-panel').classList.remove('hidden');
+}
+
+function _updateFaviconPanelProgress() {
+  document.getElementById('fv-done').textContent = _faviconDone;
+  const pct = _faviconTotal > 0 ? Math.round(_faviconDone / _faviconTotal * 100) : 0;
+  document.getElementById('fv-bar-fill').style.width = pct + '%';
+}
+
+function hideFaviconPanel() {
+  document.getElementById('favicon-panel').classList.add('hidden');
+}
+
+function _finishFaviconBatch() {
+  document.getElementById('fv-domain').textContent = 'Готово';
+  setTimeout(hideFaviconPanel, 2000);
+}
+
+document.getElementById('fv-cancel-btn').addEventListener('click', () => {
+  _faviconCancelled = true;
+  _faviconQueue = [];
+  hideFaviconPanel();
+});
+
+document.getElementById('fv-close-btn').addEventListener('click', () => {
+  _faviconCancelled = true;
+  _faviconQueue = [];
+  hideFaviconPanel();
+});
+
 // ── Duplicate finder ─────────────────────────────────────────────────────
 // ── Duplicates finder (full utility) ─────────────────────────────────────────
 

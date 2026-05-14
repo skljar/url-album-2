@@ -4,6 +4,8 @@
 const { invoke }         = window.__TAURI__.core;
 const { convertFileSrc } = window.__TAURI__.core;
 
+const MAX_FAVICON_CONCURRENCY = 5; // intentional per-domain rate limiting
+
 // ── Link checker ─────────────────────────────────────────────────────────
 // Column config: id → CSS-var suffix, label, default width
 const CHK_COLS = [
@@ -499,7 +501,6 @@ function _dUpdateBtns() {
   const hasGroup = _dGroupIdx >= 0 && (_dGroups[_dGroupIdx]?.nodes.length ?? 0) > 1;
   document.getElementById('dupes-del-one').disabled  = !hasRow;
   document.getElementById('dupes-keep-one').disabled = !hasGroup;
-  document.getElementById('dupes-export').disabled   = _dGroups.length === 0;
 }
 
 // ── Sort & resize init ──────────────────────────────────────────────────────
@@ -585,18 +586,6 @@ document.getElementById('dupes-keep-one').addEventListener('click', () => {
   });
 });
 
-document.getElementById('dupes-export').addEventListener('click', () => {
-  let text = `Поиск дубликатов ссылок\n${'='.repeat(44)}\n\n`;
-  _dGroups.forEach((g, i) => {
-    text += `Группа ${i + 1}: ${g.url}\n`;
-    g.nodes.forEach(n => {
-      text += `  ${n.title}\n    ${getFolderPath(n.parent) || '—'}\n`;
-    });
-    text += '\n';
-  });
-  invoke('save_text_file', { content: text, defaultName: 'duplicates.txt' })
-    .catch(e => { if (e !== 'Отменено') console.error(e); });
-});
 
 function closeDupesDialog() { dupesOverlay.classList.add("hidden"); }
 
@@ -667,8 +656,7 @@ function deleteFolder(node) {
       emptyHint.classList.remove("hidden");
     }
     if (ids.has(activeBookmarkNode?.id)) {
-      activeBookmarkNode = null;
-      hideDetailView();
+      clearSelection();
     }
 
     // Navigate to next/prev item
@@ -878,10 +866,6 @@ function showFolderContextMenu(e, folderNode) {
     hideContextMenu();
     openCheckerPanel(folderNode);
   }));
-  ctxMenuEl.appendChild(ctxItem("props", "Свойства", "F4", () => {
-    hideContextMenu();
-    openFolderPropsDialog(folderNode);
-  }));
   ctxMenuEl.appendChild(ctxItem("edit", "Переименовать", "F2", () => {
     hideContextMenu();
     startInlineRename(folderNode.id);
@@ -890,6 +874,11 @@ function showFolderContextMenu(e, folderNode) {
   ctxMenuEl.appendChild(ctxItem("trash", "Удалить", "Del", () => {
     hideContextMenu();
     deleteFolder(folderNode);
+  }));
+  ctxMenuEl.appendChild(ctxSep());
+  ctxMenuEl.appendChild(ctxItem("props", "Свойства", "F4", () => {
+    hideContextMenu();
+    openFolderPropsDialog(folderNode);
   }));
 
   // Close float when hovering items without sub
@@ -1128,9 +1117,6 @@ function openPropsDialog(node) {
   propsTitle.value = node.title || "";
   propsUrl.value   = node.url   || "";
   propsNote.value  = node.note  || "";
-  document.getElementById("props-id").textContent      = node.id;
-  document.getElementById("props-created").textContent  = parseUADate(node.created);
-  document.getElementById("props-visited").textContent  = parseUADate(node.visited);
   const thumbEl = document.getElementById("props-thumb");
   thumbEl.textContent = node.thumb || "—";
   thumbEl.title       = node.thumb || "";
@@ -1156,25 +1142,27 @@ async function savePropsDialog() {
   if (ti) ti.textContent = title;
   const card = gridEl.querySelector(`.card[data-id="${propsNode.id}"]`);
   if (card) {
-    const ct = card.querySelector(".card-title"), cu = card.querySelector(".card-url");
+    const ct = card.querySelector(".row-name"), cu = card.querySelector(".row-addr");
     if (ct) ct.textContent = title;
     if (cu) { cu.textContent = url; cu.title = url; }
     card.dataset.url = url;
   }
   if (activeBookmarkNode?.id === propsNode.id) {
     Object.assign(activeBookmarkNode, { title, url, note });
-    detailUrlEl.textContent = url; detailUrlEl.title = url;
+    // Immediately refresh detail panel — no restart or re-select needed
+    detailUrlEl.textContent = url;
+    detailUrlEl.title = url;
     detailNoteEl.textContent = note;
-    breadcrumb.textContent = (propsNode.parent != null ? buildBreadcrumbText(propsNode.parent) + "  /  " : "") + title;
+    breadcrumb.textContent = (propsNode.parent != null
+      ? buildBreadcrumbText(propsNode.parent) + "  /  " : "") + title;
   }
   return true;
 }
 
 document.getElementById("props-x").onclick      = closePropsDialog;
 document.getElementById("props-cancel").onclick  = closePropsDialog;
-document.getElementById("props-apply").onclick   = () => savePropsDialog();
 document.getElementById("props-ok").onclick      = async () => { if (await savePropsDialog()) closePropsDialog(); };
-propsOverlay.addEventListener("click", (e) => { if (e.target === propsOverlay) closePropsDialog(); });
+// No click-outside-to-close — user could lose typed data
 propsOverlay.addEventListener("keydown", (e) => {
   if (e.key === "Enter")  document.getElementById("props-ok").click();
   if (e.key === "Escape") closePropsDialog();
@@ -1206,8 +1194,6 @@ function openFolderPropsDialog(node) {
   document.getElementById("fprops-links").textContent   = stats.links;
   document.getElementById("fprops-folders").textContent = stats.folders;
   document.getElementById("fprops-path").textContent    = getFolderPath(node.id) || node.title;
-  document.getElementById("fprops-created").textContent = parseUADate(node.created);
-  document.getElementById("fprops-id").textContent      = node.id;
   const dlg = document.getElementById("fprops-dlg");
   dlg.style.position = ""; dlg.style.left = ""; dlg.style.top = ""; dlg.style.margin = "";
   raiseOverlay(fpropsOverlay);
@@ -1231,9 +1217,8 @@ async function saveFolderPropsDialog() {
 
 document.getElementById("fprops-x").onclick      = closeFolderPropsDialog;
 document.getElementById("fprops-cancel").onclick  = closeFolderPropsDialog;
-document.getElementById("fprops-apply").onclick   = () => saveFolderPropsDialog();
 document.getElementById("fprops-ok").onclick      = async () => { if (await saveFolderPropsDialog()) closeFolderPropsDialog(); };
-fpropsOverlay.addEventListener("click", (e) => { if (e.target === fpropsOverlay) closeFolderPropsDialog(); });
+// No click-outside-to-close — user could lose typed data
 fpropsOverlay.addEventListener("keydown", (e) => {
   if (e.key === "Enter")  document.getElementById("fprops-ok").click();
   if (e.key === "Escape") closeFolderPropsDialog();
@@ -1901,18 +1886,32 @@ const MENU_DATA = [
   {
     id: 'file', label: 'Файл',
     items: [
-      { label: 'Новая папка',             icon: 'folder', shortcut: 'Ctrl+N',       action: 'new-folder'  },
-      { label: 'Новая ссылка',            icon: 'link',   shortcut: 'Ctrl+Shift+N', action: 'new-link'    },
+      { label: 'Создать базу',   icon: 'db',     action: 'new-db'  },
+      { label: 'Открыть базу',   icon: 'db',     action: 'open-db' },
       '---',
-      { label: 'Настройки',               icon: 'gear',                              action: 'settings' },
+      { label: 'Импорт', icon: 'import', sub: [
+        { label: 'Из браузера…',    icon: 'browser', action: 'import-from-browser' },
+        '---',
+        { label: 'Из файла HTML',   icon: 'import',  action: 'import-html'      },
+        { label: 'Из файла TXT',    icon: 'import',  action: 'import-txt-lines' },
+        { label: 'Из ua.dat…',     icon: 'folder',  action: 'import-folder'    },
+      ]},
+      { label: 'Экспорт', icon: 'backup', sub: [
+        { label: 'HTML файл',        icon: 'import',  action: 'export-html' },
+        { label: 'TXT файл',         icon: 'import',  action: 'export-txt'  },
+      ]},
       '---',
-      { label: 'Открыть базу',            icon: 'db',                                action: 'open-db',        todo: true },
-      { label: 'Создать базу',            icon: 'db',                                action: 'new-db',         todo: true },
+      { label: 'Резервная копия', icon: 'backup', sub: [
+        { label: 'Создать со скриншотами',        icon: 'backup', action: 'backup-with'     },
+        { label: 'Создать без скриншотов',        icon: 'backup', action: 'backup-without'  },
+        '---',
+        { label: 'Восстановить резервную копию…', icon: 'open',   action: 'backup-restore'  },
+      ]},
       '---',
-      { label: 'Очистить базу',           icon: 'trash',                             action: 'clear-db',       todo: true },
-      { label: 'Резервная копия',         icon: 'backup',                            action: 'backup',         todo: true },
+      { label: 'Очистить базу',   icon: 'trash',  action: 'clear-db'  },
       '---',
-      { label: 'Выход',                   icon: 'quit',   shortcut: 'Alt+F4',        action: 'quit'                      },
+      { label: 'Настройки',       icon: 'gear',   action: 'settings'  },
+      { label: 'Выход',           icon: 'quit',   shortcut: 'Alt+F4', action: 'quit' },
     ]
   },
   {
@@ -1973,6 +1972,8 @@ const MENU_DATA = [
   {
     id: 'view', label: 'Вид',
     items: [
+      { label: 'Тёмная тема',        icon: 'gear',        action: 'toggle-theme'     },
+      '---',
       { label: 'Открыть все папки',  icon: 'expand-all',  action: 'expand-all'       },
       { label: 'Закрыть все папки', icon: 'collapse-all', action: 'collapse-all'     },
       '---',
@@ -2122,6 +2123,31 @@ function tbMoveItem(dir) {
     .catch(console.error);
 }
 
+// ── Open database dialog ──────────────────────────────────────────────────────
+
+(function() {
+  const overlay = document.getElementById('open-db-overlay');
+  const close   = () => overlay.classList.add('hidden');
+
+  document.getElementById('open-db-x').onclick      = close;
+  document.getElementById('open-db-cancel').onclick  = close;
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+
+  document.getElementById('open-db-ok').onclick = async () => {
+    const errEl = document.getElementById('open-db-err');
+    if (errEl) errEl.textContent = '';
+    try {
+      await invoke('open_db');
+      close();
+      await showApp();
+    } catch(e) {
+      if (e === 'Отменено') return;
+      if (errEl) errEl.textContent = e;
+      else console.error('open_db:', e);
+    }
+  };
+})();
+
 // ── New item dialog (folder / bookmark) ───────────────────────────────────────
 
 (function() {
@@ -2129,7 +2155,9 @@ function tbMoveItem(dir) {
   const titleEl    = document.getElementById('new-item-dlg-title');
   const nameInput  = document.getElementById('new-item-name');
   const urlInput   = document.getElementById('new-item-url');
+  const noteInput  = document.getElementById('new-item-note');
   const urlRow     = document.getElementById('new-item-url-row');
+  const noteRow    = document.getElementById('new-item-note-row');
   const okBtn      = document.getElementById('new-item-ok');
   let _mode = 'folder'; // 'folder' | 'link'
 
@@ -2138,7 +2166,9 @@ function tbMoveItem(dir) {
     titleEl.textContent = 'Новая ссылка';
     nameInput.value = '';
     urlInput.value  = '';
+    noteInput.value = '';
     urlRow.classList.remove('hidden');
+    noteRow.classList.remove('hidden');
     raiseOverlay(overlay);
     setTimeout(() => urlInput.focus(), 30);
   }
@@ -2171,10 +2201,28 @@ function tbMoveItem(dir) {
     warnEl.classList.add('hidden');
 
     const name = nameInput.value.trim() || url;
+    const note = noteInput ? noteInput.value : '';
     overlay.classList.add('hidden');
     try {
-      await invoke('create_bookmark', { parentId: pid, title: name, url });
-      await loadBookmarks(pid);
+      const newId = await invoke('create_bookmark', { parentId: pid, title: name, url, note });
+
+      // Refresh in-memory state (tree badge counts update too)
+      const openIds = saveOpenState();
+      allNodes   = await invoke('get_tree');
+      allFolders = allNodes.filter(n => n.kind === 'folder');
+      renderTree();
+      restoreOpenState(openIds);
+
+      // Reload right panel
+      await loadFolderContents(pid);
+
+      // Select the new item immediately
+      const newNode = allNodes.find(n => n.id === newId);
+      if (newNode) {
+        const card = gridEl.querySelector(`.card[data-id="${newId}"]`);
+        if (card) { gridSelectRow(card); card.scrollIntoView({ block: 'nearest' }); }
+        navigateToCard(newNode);
+      }
     } catch(e) { console.error(e); }
   }
 
@@ -2182,11 +2230,15 @@ function tbMoveItem(dir) {
   document.getElementById('new-item-cancel').onclick = () => overlay.classList.add('hidden');
   okBtn.onclick = submit;
   urlInput.addEventListener('input', () => warnEl.classList.add('hidden'));
+  // Enter submits (except in textarea), Escape closes — NO click-outside-to-close
   [nameInput, urlInput].forEach(inp => inp.addEventListener('keydown', e => {
     if (e.key === 'Enter') submit();
     if (e.key === 'Escape') overlay.classList.add('hidden');
   }));
-  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.classList.add('hidden'); });
+  noteInput?.addEventListener('keydown', e => {
+    if (e.key === 'Escape') overlay.classList.add('hidden');
+    // Enter in textarea = newline (default) — intentional
+  });
 })();
 
 // ── Toolbar customize dialog ──────────────────────────────────────────────────
@@ -2199,7 +2251,6 @@ function tbMoveItem(dir) {
   const remBtn   = document.getElementById('tbc-rem-btn');
   const upBtn    = document.getElementById('tbc-up');
   const downBtn  = document.getElementById('tbc-down');
-  const delBtn   = document.getElementById('tbc-del');
 
   let tbcItems  = [];  // current toolbar config copy
   let availSelId = null;   // selected cmd id in left panel
@@ -2333,7 +2384,6 @@ function tbMoveItem(dir) {
     const canAdd = availSelId != null && !tbcItems.includes(availSelId);
     addBtn.disabled  = !canAdd;
     remBtn.disabled  = activeSel < 0;
-    delBtn.disabled  = activeSel < 0;
     upBtn.disabled   = activeSel <= 0;
     downBtn.disabled = activeSel < 0 || activeSel >= tbcItems.length - 1;
   }
@@ -2378,7 +2428,6 @@ function tbMoveItem(dir) {
   };
   addBtn.onclick  = doAdd;
   remBtn.onclick  = doRemove;
-  delBtn.onclick  = doRemove;
   upBtn.onclick   = () => doMove(-1);
   downBtn.onclick = () => doMove(+1);
   document.getElementById('tbc-reset').onclick = () => {
@@ -2623,6 +2672,9 @@ function handleMenuAction(action) {
     case 'new-subfolder':
       doNewSubfolder();
       break;
+    case 'toggle-theme':
+      toggleTheme();
+      break;
     case 'expand-all':
       treeEl.querySelectorAll('.tree-children').forEach(el => {
         el.classList.add('open');
@@ -2638,11 +2690,38 @@ function handleMenuAction(action) {
     case 'settings':
       openSettingsDialog();
       break;
+
+    // ── Database ──
+    case 'backup-restore':
+      // Restoring a backup is the same as opening a database file
+      raiseOverlay(document.getElementById('open-db-overlay'));
+      break;
+    case 'open-db':
+      raiseOverlay(document.getElementById('open-db-overlay'));
+      break;
+    case 'new-db':
+      invoke('create_new_db')
+        .then(() => showApp())
+        .catch(e => { if (e !== 'Отменено') console.error('create_new_db:', e); });
+      break;
+    case 'clear-db':
+      deleteConfirm('Очистить базу данных?\nВсе закладки, папки и скриншоты будут удалены.', async () => {
+        await Promise.all([invoke('clear_db'), invoke('clear_screenshots')]).catch(console.error);
+        allNodes = []; allFolders = [];
+        activeFolderId = null;
+        exitSearchMode();          // clear search state + UI
+        hideDetailView();          // hide detail panel, reset activeBookmarkNode
+        renderTree();              // empty tree
+        gridEl.innerHTML = '';
+        emptyHint.classList.add('hidden');
+        breadcrumb.textContent = '';
+      });
+      break;
     case 'customize-toolbar':
       openToolbarCustomizeDialog();
       break;
     case 'quit':
-      window.close();
+      invoke('checkpoint_db').catch(() => {}).finally(() => window.close());
       break;
   }
 }
@@ -2759,9 +2838,17 @@ let allNodes          = [];
 let allFolders        = [];
 let activeFolderId    = null;
 let activeBookmarkNode = null;
+let dataDir           = ""; // absolute path to Data/ dir, set at startup
+
+// ── Favicon queue state ───────────────────────────────────────────────────
+let _faviconQueue     = [];   // Array<{id, url, domain, sameIds: number[]}>
+let _faviconActive    = 0;    // current in-flight invoke count
+let _faviconCancelled = false;
+let _faviconTotal     = 0;
+let _faviconDone      = 0;
 
 // ── Theme ─────────────────────────────────────────────────────────────────
-const themeBtn = document.getElementById("theme-btn");
+const themeBtn = document.getElementById("theme-btn"); // may be null after sidebar cleanup
 
 // ── App settings ──────────────────────────────────────────────────────────────
 
@@ -2769,6 +2856,8 @@ let appSettings = {
   // Общие
   theme:         'dark',
   showToolbar:   true,
+  listColWidth:  42,   // % width of "Название" column
+  sidebarWidth:  230,  // px
   accordionTree: true,
   confirmDelete: true,
   noDuplicateUrls: false,
@@ -2805,13 +2894,94 @@ async function saveAppSettings() {
 
 function applySettings(save = true) {
   applyTheme(appSettings.theme);
-  // Toolbar visibility
   if (typeof toolbarEl !== 'undefined') {
     if (appSettings.showToolbar) toolbarEl.classList.remove('hidden');
     else toolbarEl.classList.add('hidden');
   }
+  applyColWidth(appSettings.listColWidth ?? 42, false);
+  applySidebarWidth(appSettings.sidebarWidth ?? 230, false);
   if (save) saveAppSettings();
 }
+
+function applySidebarWidth(px, persist = true) {
+  appSettings.sidebarWidth = px;
+  document.documentElement.style.setProperty('--sidebar-w', px + 'px');
+  if (persist) saveAppSettings();
+}
+
+// ── Sidebar splitter ──────────────────────────────────────────────────────────
+(function initSplitter() {
+  const splitter = document.getElementById('splitter');
+  const sidebar  = document.getElementById('sidebar');
+  if (!splitter || !sidebar) return;
+
+  splitter.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = sidebar.offsetWidth;
+
+    splitter.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMove = (ev) => {
+      const newW = Math.max(120, Math.min(600, startW + ev.clientX - startX));
+      document.documentElement.style.setProperty('--sidebar-w', newW + 'px');
+    };
+
+    const onUp = () => {
+      splitter.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      applySidebarWidth(sidebar.offsetWidth, true);
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+})();
+
+// ── Column resizer ────────────────────────────────────────────────────────────
+function applyColWidth(pct, persist = true) {
+  appSettings.listColWidth = pct;
+  document.documentElement.style.setProperty('--col-name-w', pct + '%');
+  if (persist) saveAppSettings();
+}
+
+(function initColResizer() {
+  const resizer = document.getElementById('col-resizer');
+  if (!resizer) return;
+
+  resizer.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    const header = document.getElementById('list-header');
+    const startX  = e.clientX;
+    const startPct = appSettings.listColWidth ?? 42;
+
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMove = (e) => {
+      const dx   = e.clientX - startX;
+      const total = header.offsetWidth - 18 - 5 - 16; // subtract dot + resizer + scrollbar est.
+      const newPct = Math.max(15, Math.min(75, startPct + (dx / total * 100)));
+      applyColWidth(newPct, false);
+    };
+
+    const onUp = () => {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      applyColWidth(appSettings.listColWidth, true); // persist final value
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+})();
 
 // ── Settings dialog ────────────────────────────────────────────────────────────
 
@@ -2838,6 +3008,11 @@ function applySettings(save = true) {
 
   // ── Open dialog: populate fields ──
   window.openSettingsDialog = function() {
+    // Show actual DB path
+    invoke('get_db_path').then(p => {
+      const el = document.getElementById('s-db-path');
+      if (el) el.textContent = p;
+    }).catch(() => {});
     // Reset to first tab
     tabs.forEach(t => t.classList.remove('active'));
     panels.forEach(p => p.classList.remove('active'));
@@ -2896,19 +3071,31 @@ function applySettings(save = true) {
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
-  themeBtn.textContent = theme === "light" ? "🌙" : "☀";
   localStorage.setItem("theme", theme); // fast cache for pre-load
+  // Update menu label to reflect current state
+  document.querySelectorAll('.menu-entry .entry-label').forEach(el => {
+    if (el.textContent === 'Тёмная тема' || el.textContent === 'Светлая тема') {
+      el.textContent = theme === 'dark' ? 'Светлая тема' : 'Тёмная тема';
+    }
+  });
 }
 
 // Immediate apply from localStorage (before async settings load)
 applyTheme(localStorage.getItem("theme") || "dark");
 
-themeBtn.addEventListener("click", () => {
+themeBtn?.addEventListener("click", () => {
   const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
   appSettings.theme = next;
   applyTheme(next);
   saveAppSettings();
 });
+
+function toggleTheme() {
+  const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+  appSettings.theme = next;
+  applyTheme(next);
+  saveAppSettings();
+}
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
 const importScreen = document.getElementById("import-screen");
@@ -2934,22 +3121,57 @@ const importStatus = document.getElementById("import-status");
 
 // ── Init ──────────────────────────────────────────────────────────────────
 async function init() {
-  await Promise.all([loadBrowsersConfig(), loadToolbarConfig(), loadAppSettings()]);
+  await Promise.all([
+    loadBrowsersConfig(),
+    loadToolbarConfig(),
+    loadAppSettings(),
+    invoke('get_data_dir').then(d => { dataDir = d; }).catch(() => {}),
+  ]);
   buildToolbar();
-  const empty = await invoke("is_empty");
-  if (empty) {
-    await showImportScreen();
-  } else {
-    await showApp();
-  }
+  // Always open the app — empty DB is a valid state, not first-run.
+  // Welcome screen is available via File menu when needed.
+  await showApp();
 }
 
-// ── Import screen ─────────────────────────────────────────────────────────
+// ── Welcome / first-run screen ────────────────────────────────────────────────
+
+const importForm    = document.getElementById("import-form");
+const welcomeActs   = document.getElementById("welcome-actions");
+
 async function showImportScreen() {
+  // Always show welcome actions, hide the ua.dat sub-form
+  welcomeActs.classList.remove("hidden");
+  importForm.classList.add("hidden");
   importScreen.classList.remove("hidden");
   app.classList.add("hidden");
+  toolbarEl.classList.add("hidden");
+}
 
-  // Try to auto-detect ua.dat next to the exe
+// "Создать новую базу" — save dialog then open empty app
+document.getElementById("wb-new").addEventListener("click", async () => {
+  try {
+    await invoke("create_new_db");
+    await showApp();
+  } catch(e) {
+    if (e !== "Отменено") console.error("create_new_db:", e);
+  }
+});
+
+// "Открыть существующую базу" — file picker then reload
+document.getElementById("wb-open").addEventListener("click", async () => {
+  try {
+    await invoke("open_db");
+    await showApp();
+  } catch(e) {
+    if (e !== "Отменено") console.error("open_db:", e);
+  }
+});
+
+// "Импортировать ua.dat" — expand import sub-form
+document.getElementById("wb-import").addEventListener("click", async () => {
+  welcomeActs.classList.add("hidden");
+  importForm.classList.remove("hidden");
+  // Auto-detect ua.dat
   try {
     const found = await invoke("find_uadat");
     if (found) {
@@ -2957,15 +3179,23 @@ async function showImportScreen() {
       importStatus.textContent = "Найден файл данных.";
     }
   } catch (_) {}
-}
+  datPathInput.focus();
+});
 
+// "← Назад" — back to welcome
+document.getElementById("import-back").addEventListener("click", () => {
+  importForm.classList.add("hidden");
+  importStatus.textContent = "";
+  datPathInput.value = "";
+  welcomeActs.classList.remove("hidden");
+});
+
+// Import button
 importBtn.addEventListener("click", async () => {
   const path = datPathInput.value.trim();
   if (!path) return;
-
-  importBtn.disabled  = true;
+  importBtn.disabled = true;
   importStatus.textContent = "Импортирую…";
-
   try {
     const count = await invoke("import_uadat", { path });
     importStatus.textContent = `Импортировано ${count} записей.`;
@@ -2979,11 +3209,32 @@ importBtn.addEventListener("click", async () => {
   }
 });
 
+// ── Window title ──────────────────────────────────────────────────────────
+async function updateWindowTitle() {
+  try {
+    const p = await invoke('get_db_path');
+    const name = p ? p.replace(/\\/g, '/').split('/').pop() : '';
+    const title = name ? `URL Album — ${name}` : 'URL Album';
+    document.title = title;
+    await invoke('set_window_title', { title });
+  } catch(_) {}
+}
+
 // ── Main app ──────────────────────────────────────────────────────────────
 async function showApp() {
   app.classList.remove("hidden");
   if (appSettings.showToolbar) toolbarEl.classList.remove("hidden");
   importScreen.classList.add("hidden");
+
+  updateWindowTitle();
+
+  // Full UI reset — clears artifacts from any previously open database
+  activeFolderId = null;
+  activeBookmarkNode = null;
+  hideInfoBar();
+  gridEl.innerHTML = '';
+  emptyHint.classList.remove('hidden');
+  breadcrumb.textContent = '';
 
   allNodes   = await invoke("get_tree");
   allFolders = allNodes.filter(n => n.kind === "folder");
@@ -2995,6 +3246,78 @@ async function showApp() {
     ? allFolders.filter(f => f.parent === roots[0].id)
     : roots;
   if (topLevel.length > 0) selectFolder(topLevel[0].id);
+}
+
+// ── Drag & Drop ───────────────────────────────────────────────────────────────
+
+let _dragNode        = null;  // { id, kind, parent }
+let _dragExpandTimer = null;
+
+function _isDragValid(targetFolderId) {
+  if (!_dragNode) return false;
+  if (_dragNode.id === targetFolderId) return false;          // self
+  if (_dragNode.parent === targetFolderId) return false;      // already there
+  if (_dragNode.kind === 'folder') {
+    // Walk from target up to root — reject if we pass through dragNode.id
+    let cur = allNodes.find(n => n.id === targetFolderId);
+    while (cur) {
+      if (cur.id === _dragNode.id) return false;
+      if (cur.parent == null) break;
+      cur = allNodes.find(n => n.id === cur.parent);
+    }
+  }
+  return true;
+}
+
+async function _doDrop(targetFolderId) {
+  if (!_isDragValid(targetFolderId) || !_dragNode) return;
+  const openIds = saveOpenState();
+  try {
+    await invoke('move_node', { id: _dragNode.id, newParent: targetFolderId });
+    allNodes   = await invoke('get_tree');
+    allFolders = allNodes.filter(n => n.kind === 'folder');
+    renderTree();
+    restoreOpenState(openIds);
+    // Expand the target so the dropped item is visible
+    const ti = treeEl.querySelector(`.tree-item[data-id="${targetFolderId}"]`);
+    const ch = ti?.parentElement?.querySelector(':scope > .tree-children');
+    if (ti && ch) { ch.classList.add('open'); ti.classList.add('open'); }
+    // Reload right panel
+    if (activeFolderId != null) await loadFolderContents(activeFolderId);
+  } catch(e) { console.error('move_node:', e); }
+}
+
+// Attach DnD drop-target behaviour to a folder element
+function _makeFolderDropTarget(el, folderId, childrenEl) {
+  el.addEventListener('dragover', (e) => {
+    if (!_isDragValid(folderId)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    el.classList.add('drag-over');
+    // Auto-expand collapsed folder after 650ms hover
+    if (childrenEl && !childrenEl.classList.contains('open')) {
+      if (!_dragExpandTimer) {
+        _dragExpandTimer = setTimeout(() => {
+          childrenEl.classList.add('open');
+          el.classList.add('open');
+        }, 650);
+      }
+    }
+  });
+  el.addEventListener('dragleave', (e) => {
+    if (!el.contains(e.relatedTarget)) {
+      el.classList.remove('drag-over');
+      clearTimeout(_dragExpandTimer);
+      _dragExpandTimer = null;
+    }
+  });
+  el.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    el.classList.remove('drag-over');
+    clearTimeout(_dragExpandTimer);
+    _dragExpandTimer = null;
+    await _doDrop(folderId);
+  });
 }
 
 // ── Tree ──────────────────────────────────────────────────────────────────
@@ -3033,6 +3356,21 @@ function createTreeNode(node, depth) {
   if (node.url) item.dataset.url = node.url;
   item.tabIndex = -1;
 
+  // ── Drag source (all tree items) ──────────────────────────────────────────
+  item.draggable = true;
+  item.addEventListener('dragstart', (e) => {
+    _dragNode = { id: node.id, kind: node.kind, parent: node.parent };
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(node.id));
+    item.classList.add('dragging');
+  });
+  item.addEventListener('dragend', () => {
+    _dragNode = null;
+    item.classList.remove('dragging');
+    treeEl.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+    clearTimeout(_dragExpandTimer); _dragExpandTimer = null;
+  });
+
   wrap.appendChild(item);
 
   if (node.kind === "folder") {
@@ -3065,7 +3403,16 @@ function createTreeNode(node, depth) {
       wrap.appendChild(childrenEl);
     }
 
+    // ── Drop target (folders only) ──────────────────────────────────────────
+    _makeFolderDropTarget(item, node.id, childrenEl);
+
     item.addEventListener("click", (e) => {
+      e.stopPropagation();
+      // Single click: select only, no expand/collapse (classic Win32 tree behavior)
+      selectFolder(node.id, false);
+    });
+
+    item.addEventListener("dblclick", (e) => {
       e.stopPropagation();
       if (childrenEl) {
         const opening = !childrenEl.classList.contains("open");
@@ -3073,7 +3420,6 @@ function createTreeNode(node, depth) {
         item.classList.toggle("open", opening);
         if (opening && appSettings.accordionTree) collapseSiblingBranches(node.id);
       }
-      selectFolder(node.id);
     });
 
     item.addEventListener("contextmenu", (e) => {
@@ -3087,7 +3433,7 @@ function createTreeNode(node, depth) {
 
     const icon = document.createElement("span");
     icon.className = "tree-link-icon";
-    icon.innerHTML = ICONS.link;
+    icon.textContent = "●";
 
     const label = document.createElement("span");
     label.className = "label";
@@ -3110,7 +3456,7 @@ function createTreeNode(node, depth) {
   item.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
     e.preventDefault();
-    if (node.kind === "bookmark" && node.url) invoke("open_url", { url: node.url });
+    if (node.kind === "bookmark") openDetailView(node);
     else item.click();
   });
 
@@ -3253,6 +3599,11 @@ function highlightCard(bookmarkId) {
 }
 
 function navigateToResult(result) {
+  if (result.kind === 'folder') {
+    exitSearchMode();
+    selectFolder(result.id);
+    return;
+  }
   if (result.parent == null) return;
   clearSearchUI();
   searchEl.value = "";
@@ -3292,31 +3643,37 @@ function renderSearchResults(q) {
   searchResultsEl.appendChild(cnt);
 
   searchResults.forEach((r, i) => {
+    const isFolder = r.kind === 'folder';
+
     const item = document.createElement("div");
-    item.className = "result-item";
+    item.className = "result-item" + (isFolder ? " result-item-folder" : "");
 
     const top = document.createElement("div");
     top.className = "result-top";
 
     const title = document.createElement("span");
     title.className = "result-title";
-    title.textContent = r.title;
+    title.textContent = (isFolder ? "▶ " : "") + r.title;
 
     const path = document.createElement("span");
     path.className = "result-path";
-    path.textContent = getFolderPath(r.parent);
+    // For folders show path to the folder itself; for bookmarks show parent folder path
+    path.textContent = isFolder ? getFolderPath(r.id) : getFolderPath(r.parent);
 
     top.append(title, path);
+    item.appendChild(top);
 
-    const url = document.createElement("div");
-    url.className = "result-url";
-    url.textContent = r.url;
-    url.title = r.url;
+    if (!isFolder && r.url) {
+      const url = document.createElement("div");
+      url.className = "result-url";
+      url.textContent = r.url;
+      url.title = r.url;
+      item.appendChild(url);
+    }
 
-    item.append(top, url);
     item.addEventListener("click", (e) => {
-      if (e.detail >= 2) openSearchResult(i);   // double-click → open URL
-      else               navigateToResult(r);    // single-click → navigate
+      if (!isFolder && e.detail >= 2) openSearchResult(i);
+      else navigateToResult(r);
     });
     item.addEventListener("mouseenter", () => setActiveResult(i, false));
     searchResultsEl.appendChild(item);
@@ -3366,14 +3723,13 @@ function showDetailView(node) {
 
   const url = node.url || "";
 
-  // URL row
   detailUrlEl.textContent = url;
   detailUrlEl.title = url;
 
-  // Note (read-only)
   detailNoteEl.textContent = node.note || "";
 
-  // Thumbnail
+  // Viewer: show real thumbnail, or subtle domain placeholder
+  detailThumbEl.style.display = "";
   if (node.thumb) {
     detailImgEl.src = convertFileSrc(node.thumb);
     detailImgEl.style.display = "";
@@ -3389,7 +3745,6 @@ function showDetailView(node) {
     setNoImgPlaceholder(node);
   }
 
-  // Open handlers
   const open = () => { if (url) invoke("open_url", { url }); };
   detailOpenBtn.onclick      = open;
   detailUrlEl.onclick        = open;
@@ -3405,26 +3760,72 @@ function setNoImgPlaceholder(node) {
   } catch { detailNoImgEl.textContent = (node.title || "?").slice(0, 2).toUpperCase(); }
 }
 
+// ── Info bar (single-click: selection + compact info) ────────────────────────
+const infoBarEl   = document.getElementById('info-bar');
+const infoBarUrl  = document.getElementById('info-bar-url');
+const infoBarNote = document.getElementById('info-bar-note');
+
+function showInfoBar(node) {
+  activeBookmarkNode = node;
+  const url = node.url || '';
+  infoBarUrl.textContent = url;
+  infoBarUrl.title = url;
+  infoBarNote.textContent = node.note || '';
+  infoBarNote.style.display = node.note ? '' : 'none';
+  infoBarEl.classList.remove('hidden');
+  infoBarUrl.onclick = () => { if (url) invoke('open_url', { url }); };
+}
+
+function hideInfoBar() {
+  infoBarEl?.classList.add('hidden');
+}
+
+// Full viewer (double-click): hides grid, shows detail panel
+function openDetailView(node) {
+  hideInfoBar();
+  gridEl.classList.add('hidden');
+  showDetailView(node);
+}
+
 function hideDetailView() {
-  activeBookmarkNode = null;
   detailViewEl.classList.add("hidden");
   searchbarEl.classList.remove("hidden");
+
+  // If viewer was opened from tree (folder not shown), reload the parent folder
+  const node = activeBookmarkNode;
+  if (node?.parent != null && activeFolderId !== node.parent) {
+    activeFolderId = node.parent;
+    loadFolderContents(node.parent);
+  }
+
+  gridEl.classList.remove("hidden");
+  // Keep info bar showing for the still-selected item
+  if (node) showInfoBar(node);
+  else hideInfoBar();
+}
+
+function clearSelection() {
+  activeBookmarkNode = null;
+  hideInfoBar();
+  detailViewEl.classList.add("hidden");
   gridEl.classList.remove("hidden");
 }
 
-function selectTreeBookmark(node) {
-  hideContextMenu();
-  // Update tree active state
+// Shared: update tree active highlight + breadcrumb, no side effects
+function _activateTreeItem(node) {
   treeEl.querySelectorAll(".tree-item.active").forEach(el => el.classList.remove("active"));
   const treeItem = treeEl.querySelector(`.tree-item[data-id="${node.id}"]`);
   if (treeItem) { treeItem.classList.add("active"); treeItem.focus(); }
-
-  // Breadcrumb: full path + bookmark title
   breadcrumb.textContent = node.parent != null
     ? buildBreadcrumbText(node.parent) + "  /  " + node.title
     : node.title;
+}
 
-  showDetailView(node);
+// Tree panel click on a bookmark → open full detail viewer (grid hides)
+function selectTreeBookmark(node) {
+  hideContextMenu();
+  _activateTreeItem(node);
+  openDetailView(node);
 }
 
 // ── Tree keyboard navigation ───────────────────────────────────────────────
@@ -3450,26 +3851,40 @@ treeEl.addEventListener("keydown", (e) => {
   }
 });
 
-function selectFolder(folderId) {
+// expand=true  → force-open the folder (navigation from right panel / programmatic)
+// expand=false → don't touch open state (tree click already toggled it)
+function selectFolder(folderId, expand = true) {
   hideContextMenu();
   searchEl.value = "";
   searchClearBtn.classList.remove("visible");
   clearTimeout(searchTimer);
   clearSearchUI();
-  hideDetailView();
+  clearSelection();
   activeFolderId = folderId;
 
   // Update active style
   document.querySelectorAll(".tree-item.active")
     .forEach(el => el.classList.remove("active"));
-  const item = document.querySelector(`.tree-item[data-id="${folderId}"]`);
-  if (item) item.classList.add("active");
+
+  // Always expand ancestors so the folder is reachable in the tree
+  expandTreePath(folderId);
+
+  const folderTreeItem = treeEl.querySelector(`.tree-item[data-id="${folderId}"]`);
+  if (folderTreeItem) {
+    if (expand) {
+      // Force-open the folder itself (navigating from outside the tree)
+      const ch = folderTreeItem.parentElement?.querySelector(":scope > .tree-children");
+      if (ch) { ch.classList.add("open"); folderTreeItem.classList.add("open"); }
+    }
+    folderTreeItem.classList.add("active");
+    folderTreeItem.scrollIntoView({ block: "nearest" });
+  }
 
   // Breadcrumb
   const folder = allFolders.find(f => f.id === folderId);
   breadcrumb.textContent = folder ? buildBreadcrumbText(folderId) : "";
 
-  return loadBookmarks(folderId);
+  return loadFolderContents(folderId);
 }
 
 function buildBreadcrumbText(id) {
@@ -3486,21 +3901,67 @@ function buildBreadcrumbText(id) {
   return parts.join("  /  ");
 }
 
-// ── Bookmarks grid ────────────────────────────────────────────────────────
-async function loadBookmarks(folderId) {
+// ── Folder contents (subfolders + bookmarks) ──────────────────────────────
+async function loadFolderContents(folderId) {
   gridEl.innerHTML = "";
   emptyHint.classList.add("hidden");
 
-  const bookmarks = await invoke("get_bookmarks", { folderId });
+  const subfolders = allNodes.filter(n => n.parent === folderId && n.kind === 'folder');
+  const bookmarks  = allNodes.filter(n => n.parent === folderId && n.kind === 'bookmark');
 
-  if (bookmarks.length === 0) {
+  if (subfolders.length === 0 && bookmarks.length === 0) {
     emptyHint.classList.remove("hidden");
     return;
   }
 
-  for (const b of bookmarks) {
-    gridEl.appendChild(createCard(b));
-  }
+  for (const f of subfolders) gridEl.appendChild(createFolderRow(f));
+  for (const b of bookmarks)  gridEl.appendChild(createCard(b));
+}
+
+// Kept for callers that reload after sort/move — delegates to loadFolderContents
+function loadBookmarks(folderId) { return loadFolderContents(folderId); }
+
+function createFolderRow(node) {
+  const row = document.createElement("div");
+  row.className = "card card-folder";
+  row.dataset.id   = node.id;
+  row.dataset.kind = "folder";
+
+  // Drag source (move the folder itself)
+  row.draggable = true;
+  row.addEventListener('dragstart', (e) => {
+    _dragNode = { id: node.id, kind: 'folder', parent: node.parent ?? activeFolderId };
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(node.id));
+    row.classList.add('dragging');
+  });
+  row.addEventListener('dragend', () => {
+    _dragNode = null;
+    row.classList.remove('dragging');
+    treeEl.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+    clearTimeout(_dragExpandTimer); _dragExpandTimer = null;
+  });
+
+  // Drop target (drop onto this folder to move items into it)
+  _makeFolderDropTarget(row, node.id, null);
+
+  const dot = document.createElement("span");
+  dot.className = "row-dot row-dot-folder";
+  dot.textContent = "▶";
+
+  const name = document.createElement("span");
+  name.className = "row-name";
+  name.textContent = node.title;
+
+  const sep = document.createElement("span");
+  sep.className = "row-sep";
+
+  const addr = document.createElement("span");
+  addr.className = "row-addr row-addr-folder";
+  addr.textContent = node.count > 0 ? node.count + " ссылок" : "";
+
+  row.append(dot, name, sep, addr);
+  return row;
 }
 
 function createCard(b) {
@@ -3511,39 +3972,55 @@ function createCard(b) {
   card.dataset.thumb = b.thumb || "";
   if (b.note) card.title = b.note;
 
-  // Thumbnail
-  const thumb = document.createElement("div");
-  thumb.className = "card-thumb";
+  // Drag source
+  card.draggable = true;
+  card.addEventListener('dragstart', (e) => {
+    _dragNode = { id: b.id, kind: 'bookmark', parent: b.parent ?? activeFolderId };
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(b.id));
+    card.classList.add('dragging');
+  });
+  card.addEventListener('dragend', () => {
+    _dragNode = null;
+    card.classList.remove('dragging');
+    treeEl.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+    clearTimeout(_dragExpandTimer); _dragExpandTimer = null;
+  });
 
-  if (b.thumb) {
-    const img = document.createElement("img");
-    img.src = convertFileSrc(b.thumb);
-    img.alt = "";
-    img.onerror = () => {
-      img.remove();
-      thumb.appendChild(makeNoImg(b.title));
-    };
-    thumb.appendChild(img);
-  } else {
-    thumb.appendChild(makeNoImg(b.title));
-  }
+  const dot = document.createElement("span");
+  dot.className = "row-dot";
+  dot.textContent = "●";
 
-  // Body
-  const body = document.createElement("div");
-  body.className = "card-body";
+  const name = document.createElement("span");
+  name.className = "row-name";
+  name.textContent = b.title;
 
-  const title = document.createElement("div");
-  title.className = "card-title";
-  title.textContent = b.title;
+  const sep = document.createElement("span");
+  sep.className = "row-sep";
 
-  const url = document.createElement("div");
-  url.className = "card-url";
-  url.textContent = b.url;
-  url.title = b.url;
+  const addr = document.createElement("span");
+  addr.className = "row-addr";
+  addr.textContent = b.url;
+  addr.title = b.url;
 
-  body.append(title, url);
-  card.append(thumb, body);
+  card.append(dot, name, sep, addr);
   return card;
+}
+
+function extractDomain(url) {
+  try {
+    const u = new URL(url.startsWith('http') ? url : 'https://' + url);
+    return u.hostname.replace(/^www\./, '').toLowerCase();
+  } catch { return null; }
+}
+
+function setFaviconOnEl(el, src) {
+  const img = document.createElement('img');
+  img.src = src;
+  img.className = 'favicon-icon';
+  img.onerror = () => img.remove(); // keep ● text if load fails
+  el.innerHTML = '';
+  el.appendChild(img);
 }
 
 function makeNoImg(title) {
@@ -3568,36 +4045,56 @@ function nodeFromCard(card) {
         thumb: card.dataset.thumb || null };
 }
 
+// Grid single-click: sync tree highlight + show info bar, keep grid visible
 function navigateToCard(node) {
   if (node.parent != null) expandTreePath(node.parent);
-  selectTreeBookmark(node);
+  _activateTreeItem(node);
+  showInfoBar(node);
   requestAnimationFrame(() => {
     treeEl.querySelector(`.tree-item[data-id="${node.id}"]`)
       ?.scrollIntoView({ block: "nearest" });
   });
 }
 
-// Single click → navigate (tree + detail view), NOT open browser
+// ── Grid interaction ──────────────────────────────────────────────────────
+function gridSelectRow(card) {
+  gridEl.querySelectorAll(".card.selected").forEach(c => c.classList.remove("selected"));
+  card.classList.add("selected");
+}
+
 gridEl.addEventListener("click", (e) => {
   if (e.detail >= 2) return;
   const card = e.target.closest(".card");
   if (!card) return;
-  gridEl.querySelectorAll(".card.selected").forEach(c => c.classList.remove("selected"));
-  card.classList.add("selected");
-  navigateToCard(nodeFromCard(card));
+  gridSelectRow(card);
+
+  if (card.dataset.kind === "folder") {
+    const node = allNodes.find(n => n.id === parseInt(card.dataset.id));
+    if (node) selectFolder(node.id);
+  } else {
+    navigateToCard(nodeFromCard(card));
+  }
 });
 
-// Double click → open in browser
 gridEl.addEventListener("dblclick", (e) => {
   const card = e.target.closest(".card");
-  if (card?.dataset.url) openWithBrowser(card.dataset.url, getDefaultBrowserPath());
+  if (!card) return;
+  if (card.dataset.kind === "folder") {
+    const node = allNodes.find(n => n.id === parseInt(card.dataset.id));
+    if (node) selectFolder(node.id);
+  } else {
+    // Double-click bookmark → open full viewer
+    const node = nodeFromCard(card);
+    openDetailView(node);
+  }
 });
 
 gridEl.addEventListener("contextmenu", (e) => {
   const card = e.target.closest(".card");
-  if (!card?.dataset.url) return;
-  gridEl.querySelectorAll(".card.selected").forEach(c => c.classList.remove("selected"));
-  card.classList.add("selected");
+  if (!card) return;
+  gridSelectRow(card);
+  if (card.dataset.kind === "folder") return; // no context menu for folders yet
+  if (!card.dataset.url) return;
   const found = allNodes.find(n => String(n.id) === String(card.dataset.id));
   const node  = found
     ? { ...found, thumb: found.thumb || card.dataset.thumb || null }

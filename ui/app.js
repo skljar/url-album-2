@@ -4156,6 +4156,68 @@ function startFaviconWorkers() {
   for (let i = 0; i < MAX_FAVICON_CONCURRENCY; i++) _runFaviconWorker();
 }
 
+function collectBookmarksRecursive(folderId) {
+  const result = [];
+  const queue  = [folderId];
+  while (queue.length > 0) {
+    const id = queue.shift();
+    for (const n of allNodes) {
+      if (n.parent !== id) continue;
+      if (n.kind === 'bookmark' && n.url) result.push(n);
+      else if (n.kind === 'folder') queue.push(n.id);
+    }
+  }
+  return result;
+}
+
+function buildFaviconQueue(bookmarks) {
+  const domainMap = new Map(); // domain -> index in queue
+  const queue = [];
+  for (const node of bookmarks) {
+    const domain = extractDomain(node.url);
+    if (!domain) continue;
+    if (domainMap.has(domain)) {
+      queue[domainMap.get(domain)].sameIds.push(node.id);
+    } else {
+      domainMap.set(domain, queue.length);
+      queue.push({ id: node.id, url: node.url, domain, sameIds: [] });
+    }
+  }
+  return queue;
+}
+
+async function loadSingleFavicon(node) {
+  if (!node.url) return;
+  try {
+    const filename = await invoke('fetch_favicon', { id: node.id, url: node.url });
+    if (filename) {
+      const n = allNodes.find(n => n.id === node.id);
+      if (n) n.favicon = filename;
+      updateFaviconInDOM(node.id, dataDir + '/favicons/' + filename);
+    }
+  } catch(e) {
+    console.error('loadSingleFavicon:', e);
+  }
+}
+
+function startFaviconBatch(folderNode, recursive = true) {
+  _faviconCancelled = false;
+  _faviconQueue     = [];
+  _faviconActive    = 0;
+
+  const bookmarks = recursive
+    ? collectBookmarksRecursive(folderNode.id)
+    : allNodes.filter(n => n.parent === folderNode.id && n.kind === 'bookmark' && n.url);
+
+  if (bookmarks.length === 0) return;
+
+  _faviconQueue = buildFaviconQueue(bookmarks);
+  if (_faviconQueue.length === 0) return;
+
+  showFaviconPanel(_faviconQueue.length);
+  startFaviconWorkers();
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 function makeNoImg(title) {

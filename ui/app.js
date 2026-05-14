@@ -3433,7 +3433,11 @@ function createTreeNode(node, depth) {
 
     const icon = document.createElement("span");
     icon.className = "tree-link-icon";
-    icon.textContent = "●";
+    if (node.favicon && dataDir) {
+      setFaviconOnEl(icon, convertFileSrc(dataDir + '/favicons/' + node.favicon));
+    } else {
+      icon.textContent = "●";
+    }
 
     const label = document.createElement("span");
     label.className = "label";
@@ -3726,6 +3730,18 @@ function showDetailView(node) {
   detailUrlEl.textContent = url;
   detailUrlEl.title = url;
 
+  const detailFavEl = document.getElementById('detail-favicon');
+  if (detailFavEl) {
+    if (node.favicon && dataDir) {
+      detailFavEl.src = convertFileSrc(dataDir + '/favicons/' + node.favicon);
+      detailFavEl.classList.remove('hidden');
+      detailFavEl.onerror = () => detailFavEl.classList.add('hidden');
+    } else {
+      detailFavEl.classList.add('hidden');
+      detailFavEl.src = '';
+    }
+  }
+
   detailNoteEl.textContent = node.note || "";
 
   // Viewer: show real thumbnail, or subtle domain placeholder
@@ -3989,7 +4005,11 @@ function createCard(b) {
 
   const dot = document.createElement("span");
   dot.className = "row-dot";
-  dot.textContent = "●";
+  if (b.favicon && dataDir) {
+    setFaviconOnEl(dot, convertFileSrc(dataDir + '/favicons/' + b.favicon));
+  } else {
+    dot.textContent = "●";
+  }
 
   const name = document.createElement("span");
   name.className = "row-name";

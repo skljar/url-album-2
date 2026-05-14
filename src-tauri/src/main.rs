@@ -102,6 +102,132 @@ fn clear_thumb(state: tauri::State<AppState>, id: i64) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn get_data_dir(state: tauri::State<AppState>) -> Result<String, String> {
+    let dir = state.db_path.lock().map_err(|e| e.to_string())?
+        .parent().ok_or("no parent dir")?.to_path_buf().join("Data");
+    Ok(dir.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+async fn fetch_favicon(
+    state: tauri::State<'_, AppState>,
+    id: i64,
+    url: String,
+) -> Result<Option<String>, String> {
+    // ── 1. Extract domain ────────────────────────────────────────────────
+    let normalized = normalize_url(&url);
+    let domain = match extract_domain(&normalized) {
+        Some(d) if !d.is_empty() => d,
+        _ => return Ok(None),
+    };
+    let safe = sanitize_domain(&domain);
+
+    // ── 2. Build favicons dir (lock db_path briefly, then release) ────────
+    let favicons_dir = {
+        let p = state.db_path.lock().map_err(|e| e.to_string())?;
+        p.parent().ok_or("no parent dir")?.to_path_buf()
+            .join("Data").join("favicons")
+    };
+    std::fs::create_dir_all(&favicons_dir).map_err(|e| e.to_string())?;
+
+    // ── 3. Cache hit: scan for {safe_domain}.* ────────────────────────────
+    if let Ok(entries) = std::fs::read_dir(&favicons_dir) {
+        for entry in entries.flatten() {
+            let fname = entry.file_name().to_string_lossy().to_string();
+            let stem  = std::path::Path::new(&fname)
+                .file_stem().unwrap_or_default()
+                .to_string_lossy().to_string();
+            if stem == safe {
+                let conn = state.db.lock().map_err(|e| e.to_string())?;
+                conn.execute(
+                    "UPDATE nodes SET favicon = ?1 WHERE id = ?2",
+                    rusqlite::params![fname, id],
+                ).map_err(|e| e.to_string())?;
+                return Ok(Some(fname));
+            }
+        }
+    }
+
+    // ── 4. HTTP client ───────────────────────────────────────────────────
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .user_agent("Mozilla/5.0 (compatible; url-album/2.0)")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    // ── 5. Attempt favicon.ico ────────────────────────────────────────────
+    let favicon_ico = format!("https://{}/favicon.ico", domain);
+    let (raw_bytes, ext) = match client.get(&favicon_ico).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            let ct = resp.headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_string();
+            let ext = ext_from_content_type(&ct);
+            match resp.bytes().await {
+                Ok(b) if b.len() > 20 => (Some(b), ext),
+                _ => (None, "ico"),
+            }
+        }
+        _ => (None, "ico"),
+    };
+
+    // ── 6. Fallback: parse HTML <head> for <link rel="icon"> ─────────────
+    let (raw_bytes, ext) = if raw_bytes.is_none() {
+        let page = format!("https://{}/", domain);
+        let base = format!("https://{}", domain);
+        match client.get(&page).send().await {
+            Ok(resp) => match resp.text().await {
+                Ok(html) => match find_icon_href(&html, &base) {
+                    Some(icon_url) => match client.get(&icon_url).send().await {
+                        Ok(r2) if r2.status().is_success() => {
+                            let ct = r2.headers()
+                                .get("content-type")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("")
+                                .to_string();
+                            let ext = ext_from_content_type(&ct);
+                            match r2.bytes().await {
+                                Ok(b) if b.len() > 20 => (Some(b), ext),
+                                _ => (None, "ico"),
+                            }
+                        }
+                        _ => (None, "ico"),
+                    },
+                    None => (None, "ico"),
+                },
+                _ => (None, "ico"),
+            },
+            _ => (None, "ico"),
+        }
+    } else {
+        (raw_bytes, ext)
+    };
+
+    // ── 7. Nothing found ─────────────────────────────────────────────────
+    let bytes = match raw_bytes {
+        Some(b) => b,
+        None => return Ok(None),
+    };
+
+    // ── 8. Save file + update DB ─────────────────────────────────────────
+    let filename  = format!("{}.{}", safe, ext);
+    let file_path = favicons_dir.join(&filename);
+    std::fs::write(&file_path, &bytes).map_err(|e| e.to_string())?;
+
+    {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE nodes SET favicon = ?1 WHERE id = ?2",
+            rusqlite::params![filename, id],
+        ).map_err(|e| e.to_string())?;
+    }
+
+    Ok(Some(filename))
+}
+
+#[tauri::command]
 fn refresh_thumb(state: tauri::State<AppState>, id: i64, url: String) -> Result<String, String> {
     let url = normalize_url(&url);
     let data_dir = state.db_path.lock().map_err(|e| e.to_string())?

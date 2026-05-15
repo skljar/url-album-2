@@ -250,13 +250,35 @@ async fn fetch_favicon(
         (raw_bytes, ext)
     };
 
-    // ── 8. Nothing found ─────────────────────────────────────────────────
+    // ── 8. Fallback: Google favicon service ──────────────────────────────
+    let (raw_bytes, ext) = if raw_bytes.is_none() {
+        let g_url = format!("https://www.google.com/s2/favicons?domain={}&sz=32", domain);
+        match client.get(&g_url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                let ct = resp.headers()
+                    .get("content-type")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .to_string();
+                let ext = ext_from_content_type(&ct);
+                match resp.bytes().await {
+                    Ok(b) if is_valid_image(&b) && b.len() > 68 => (Some(b), ext),
+                    _ => (None, "ico"),
+                }
+            }
+            _ => (None, "ico"),
+        }
+    } else {
+        (raw_bytes, ext)
+    };
+
+    // ── 9. Nothing found ─────────────────────────────────────────────────
     let bytes = match raw_bytes {
         Some(b) => b,
         None => return Ok(None),
     };
 
-    // ── 9. Save file + update DB ─────────────────────────────────────────
+    // ── 10. Save file + update DB ────────────────────────────────────────
     let filename  = format!("{}.{}", safe, ext);
     let file_path = favicons_dir.join(&filename);
     std::fs::write(&file_path, &bytes).map_err(|e| e.to_string())?;

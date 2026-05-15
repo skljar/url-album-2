@@ -1503,16 +1503,16 @@ function showContextMenu(e, node) {
   );
   ctxMenuEl.appendChild(
     ctxItem("refresh", "Обновить рисунок", null,
-      () => refreshThumb(node), !node.url)   // active whenever there's a URL
+      () => refreshThumb(node), !node.url)
+  );
+  ctxMenuEl.appendChild(
+    ctxItem("delimg",  "Удалить рисунок",  null,
+      () => clearThumb(node), !hasThumb)
   );
   ctxMenuEl.appendChild(
     ctxItem("favicon", "Загрузить favicon", null,
       () => { hideContextMenu(); loadSingleFavicon(node); },
       !node.url)
-  );
-  ctxMenuEl.appendChild(
-    ctxItem("delimg",  "Удалить рисунок",  null,
-      () => clearThumb(node), !hasThumb)     // active only if thumb exists
   );
 
   ctxMenuEl.appendChild(ctxSep());

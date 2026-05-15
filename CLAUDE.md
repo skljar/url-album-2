@@ -1,0 +1,312 @@
+# URL Album 2 — CLAUDE.md
+
+Контекст для продолжения работы в новом окне.
+
+---
+
+## Что это за проект
+
+**URL Album 2** — portable desktop bookmark manager на Tauri 2 + Rust + Vanilla JS.  
+Духовный наследник старого URL-Album (Win32, ~2008). Хранит закладки локально в SQLite,  
+без облака, без синхронизации. Философия: portable, minimalistic, classic Win32 UX.
+
+Оригинальный URL-Album (`urlalbum.exe`, `ua.dat.bak`) лежит в корне проекта для сравнения.
+
+---
+
+## Структура проекта
+
+```
+C:\Projects\url-album-2\
+├── src-tauri\               ← Rust/Tauri backend
+│   ├── src\
+│   │   ├── main.rs          ← все Tauri-команды (~1500+ строк)
+│   │   ├── db.rs            ← SQLite схема, запросы, экспорт/импорт
+│   │   └── importer.rs      ← парсер ua.dat (Windows-1251)
+│   ├── Cargo.toml
+│   ├── tauri.conf.json      ← frontendDist: "../ui", center:true, minWidth:500
+│   └── build.rs
+├── ui\                      ← Vanilla JS frontend (встраивается в exe при сборке)
+│   ├── index.html
+│   ├── app.js               ← весь UI (~4500+ строк)
+│   └── style.css
+├── CLAUDE.md                ← этот файл
+├── docs\superpowers\
+│   ├── specs\               ← design docs
+│   └── plans\               ← implementation plans
+├── screenshots\             ← скриншоты для сравнения/отладки
+└── Data\                    ← thumbnails/скриншоты закладок (legacy)
+```
+
+---
+
+## Как запустить
+
+**⚠️ Важно**: Tauri встраивает `ui/` в бинарник при компиляции.  
+**Любые изменения в JS/CSS/HTML требуют `cargo build`** перед запуском.  
+Простой перезапуск exe без rebuild = старый встроенный frontend.
+
+```powershell
+# Рабочая директория: C:\Projects\url-album-2\src-tauri
+
+# ⚠️ Сначала убить процесс — иначе cargo не может заменить exe (access denied)
+Stop-Process -Name "url-album" -Force -ErrorAction SilentlyContinue
+
+# Собрать и запустить (debug):
+cargo build
+Start-Process ".\target\debug\url-album.exe" -WorkingDirectory ".\target\debug"
+
+# Release сборка:
+cargo build --release
+
+# ❌ НЕ использовать cargo tauri dev — бинарник требует запущенного dev-сервера
+```
+
+Portable-файлы рядом с exe (в `target\debug\`):
+- `album.db` — база по умолчанию
+- `last_db.txt` — последняя открытая база (авто-resume при старте)
+- `settings.json` — настройки приложения
+- `toolbar.json` — конфиг тулбара
+- `browsers.json` — список браузеров
+- `Data\` — скриншоты/thumbnails + `Data\favicons\` — кэш favicon файлов
+
+---
+
+## Стек
+
+| Компонент | Технология |
+|---|---|
+| Shell | Tauri 2 |
+| Backend | Rust |
+| БД | SQLite (rusqlite, bundled), WAL mode, `PRAGMA synchronous = FULL` |
+| Frontend | Vanilla JS (без фреймворков), CSS переменные, HTML5 DnD |
+| Диалоги | rfd 0.15 (`AsyncFileDialog`, без `set_parent` — DPI-бага на Windows) |
+| HTTP | reqwest 0.12 (rustls-tls, async) |
+| Encoding | encoding_rs (Windows-1251 для ua.dat) |
+
+---
+
+## Что реализовано и работает
+
+### Backend (Rust / main.rs)
+- `get_tree` — дерево всех узлов (папки + ссылки), включает поле `favicon`
+- `get_bookmarks` — ссылки папки
+- `create_bookmark(parent_id, title, url, note?)` — создать ссылку
+- `create_folder(parent_id, title)` — создать папку
+- `update_bookmark(id, title, url, note)` — редактировать ссылку
+- `rename_node(id, title)` — переименовать папку
+- `delete_folder(id)` — рекурсивное удаление с CTE
+- `delete_node(id)` — удалить ссылку
+- `move_node(id, new_parent)` — drag & drop, с валидацией circular refs
+- `set_sort_idx(id, sort_idx)` — порядок сортировки
+- `sort_folder(folder_id, by, desc)` — сортировка папки
+- `sort_all_bookmarks(by, desc)` — глобальная сортировка
+- `search_bookmarks(query, by_title, by_url, by_note)` — поиск (папки + ссылки)
+- `open_url(url)` — открыть в браузере (`rundll32.exe url.dll,FileProtocolHandler`, надёжно)
+- `open_url_with(url, browser)` — открыть в конкретном браузере
+- `check_url(url)` — HTTP-проверка ссылки
+- `create_new_db` — создать новую БД (Save File Dialog)
+- `open_db` — открыть существующую БД
+- `switch_db` — переключиться между базами, checkpoint WAL
+- `get_db_path` / `set_window_title` — путь к активной БД, titlebar
+- `get_data_dir` — путь к папке Data/ рядом с exe (используется JS для favicon путей)
+- `backup_db` / `backup_db_with_data` — резервная копия
+- `clear_db` — очистить базу (с VACUUM + WAL restore)
+- `checkpoint_db` — WAL checkpoint
+- `refresh_thumb(id, url, width?, height?, timeout?)` — скриншот через Edge/Chrome headless; принимает размер и таймаут из настроек
+- `clear_thumb(id)` / `clear_screenshots()` — очистить thumbnails
+- `fetch_favicon(id, url)` — загрузить favicon для ссылки: кэш по домену → favicon.ico → HTML fallback; `is_valid_image()` отсеивает HTML-ошибки
+- `update_node_favicon(id, filename)` — записать favicon filename в DB (для sameIds domain dedup)
+- `import_uadat / import_uadat_pick` — импорт из старого ua.dat
+- `import_html / import_txt / import_sync` — импорт из HTML/TXT/JSON
+- `import_from_browser(browser_id)` — импорт из Chrome/Firefox/Edge/Opera/Brave
+- `import_from_bookmarks_file` — импорт из конкретного файла
+- `export_folder_html / export_folder_txt / export_folder_sync` — экспорт
+- `detect_browsers / detect_browser_exes` — автодетектирование браузеров
+- `load_browsers_config / save_browsers_config` — portable browsers.json
+- `load_settings / save_settings` — portable settings.json
+- `load_toolbar_config / save_toolbar_config` — portable toolbar.json
+- `normalize_url(url)` — добавляет https:// если нет схемы (только при открытии, не в БД)
+
+### Favicon helpers (Rust / main.rs)
+- `extract_domain(url)` — извлечь домен, убрать www.
+- `sanitize_domain(domain)` — только `[a-z0-9.-]`, остальное → `_`
+- `ext_from_content_type(ct)` — определить расширение по Content-Type
+- `is_valid_image(bytes)` — проверка magic bytes (PNG, ICO, GIF, JPEG, WebP, SVG)
+- `find_icon_href(html, base)` — найти `<link rel="icon">` в HTML
+- `attr_value(tag, attr)` / `resolve_href(href, base)` — вспомогательные для парсинга
+
+### Multi-DB / Portable
+- `AppState { db: Mutex<Connection>, db_path: Mutex<PathBuf> }`
+- `last_db.txt` рядом с exe — авто-resume последней базы при старте
+- Все пути относительны exe: `album.db`, `Data\`, конфиги
+- Диалоги открытия/создания БД стартуют в папке текущей базы
+
+### DB Schema
+```sql
+CREATE TABLE nodes (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent   INTEGER,
+    kind     TEXT NOT NULL DEFAULT 'bookmark',
+    title    TEXT NOT NULL,
+    url      TEXT,
+    thumb    TEXT,         -- полный абсолютный путь к screenshot PNG
+    note     TEXT,
+    created  TEXT,
+    visited  TEXT,
+    sort_idx INTEGER DEFAULT 0,
+    favicon  TEXT          -- только filename (напр. "github.com.png"), путь собирается в runtime
+);
+```
+
+### Frontend (app.js / ~4500+ строк)
+
+**Навигационная модель:**
+- Левая панель: дерево (папки + ссылки как листья, `●` иконка или favicon 16×16)
+- Правая панель: содержимое папки (подпапки + ссылки) как compact list view
+- Два режима: list mode (grid) и viewer mode (detail view)
+
+**Поведение кликов:**
+- Tree → папка: `selectFolder(id, expand=false)` — toggle + show contents; `item.focus()` для keyboard nav
+- Tree → ссылка: `selectTreeBookmark(node)` → `openDetailView(node)` — full viewer; `item.focus()`
+- Grid single click → ссылка: `openDetailView(node)` — full viewer (карточка)
+- Grid double click → ссылка: `openWithBrowser(url)` — открыть в браузере
+- Grid single/double click → папка: `selectFolder(id)` — navigate into folder
+- Tree ↑↓ стрелки: перемещают фокус И выбирают элемент (`selectFolder` / `selectTreeBookmark`)
+
+**Компоненты UI:**
+- `#sidebar` + `#splitter` + `#main` — основной layout, splitter resizable (сохраняется в settings)
+- `#list-header` + `#grid` — compact list с resizable колонками (CSS var `--col-name-w`)
+- `#detail-view` — full viewer: thumbnail + favicon перед URL + note
+- `#favicon-panel` — non-modal прогресс-панель загрузки favicon (левый нижний угол)
+- `#breadcrumb` — путь к текущему элементу
+- Toolbar с кастомизацией (`CMD_REGISTRY`, drag & drop порядка кнопок)
+- Menubar: Файл, Ссылки, Поиск, Вид
+- Поиск: Ctrl+F, ищет по папкам + названиям + URL + заметкам
+
+**Favicon система (JS):**
+- `MAX_FAVICON_CONCURRENCY = 5` — константа в начале app.js (intentional rate limiting)
+- `dataDir` — путь к Data/ (загружается при старте через `get_data_dir`)
+- `faviconFilePath(filename)` — нормализует path separators для `convertFileSrc` на Windows
+- `setFaviconOnEl(el, src)` — ставит favicon img, при ошибке восстанавливает `●`
+- `extractDomain(url)` — извлечь домен для dedup
+- `buildFaviconQueue(bookmarks)` — dedup по домену; один item на домен + `sameIds[]`
+- `_runFaviconWorker()` — worker loop (5 параллельных invoke)
+- `applyFaviconToDOM(item, filename)` — обновить allNodes + DOM + вызвать `update_node_favicon` для каждого sameId
+- `updateFaviconInDOM(nodeId, filePath)` — live update tree + grid + detail
+- `loadSingleFavicon(node)` — одна ссылка, без панели, после загрузки reload грида
+- `startFaviconBatch(folderNode, recursive)` — запуск batch с прогресс-панелью
+- Контекстное меню ссылки: "Загрузить favicon"
+- Контекстное меню папки: "Загрузить favicon'ы" (recursive)
+
+**Drag & Drop:**
+- Все элементы дерева и grid-строки draggable
+- Папки — drop targets (в дереве и в grid)
+- Auto-expand при hover 650ms
+- Валидация: no self-parent, no circular refs
+- После drop: `get_tree` + re-render + reload panel
+
+**Диалоги:**
+- "Новая ссылка": поля URL, Название, Заметка. НЕ закрывается по backdrop-клику
+- "Свойства ссылки": OK / Отмена
+- "Свойства папки": OK / Отмена
+- "Дубликаты ссылок" — full-screen двухпанельный finder
+- "Браузер-менеджер" — portable browsers.json
+- "Настройки" — вкладки: Общие, Прокси, Рисунок (с кнопкой "По умолчанию")
+
+**Сохраняемые настройки (settings.json):**
+- `theme` — light/dark
+- `showToolbar` — видимость toolbar
+- `listColWidth` — ширина колонки "Название" в grid (%)
+- `sidebarWidth` — ширина левой панели (px)
+- `accordionTree` — accordion режим дерева
+- `confirmDelete` — подтверждение удаления
+- `noDuplicateUrls` — проверка дублей при добавлении
+- `thumbWidth` / `thumbHeight` / `thumbTimeout` — настройки скриншота (дефолт: 1280×800, 30сек)
+
+---
+
+## Известные баги / TODO
+
+### Активные проблемы
+- [ ] Accordion mode в настройках — не всегда корректно закрывает ветки при навигации из правой панели
+- [ ] `tbMoveItem` — работает только внутри одной папки
+- [ ] Поиск — breadcrumb не всегда обновляется при клике на папку из результатов
+- [ ] `backup_db` с `set_parent(&window)` — может вызывать DPI issues на Windows
+
+### Архитектурные ограничения
+- `rfd::AsyncFileDialog` без `set_parent` на Windows (убрано из `open_db` из-за DPI-бага)
+- `allNodes` — полная перезагрузка при каждом изменении через `invoke('get_tree')`
+- `thumb` хранит полный абсолютный путь в DB (legacy, в отличие от `favicon` который хранит только filename)
+
+### Что НЕ сделано
+- [ ] Контекстное меню для папок в правой панели (только в дереве)
+- [ ] Drag & drop сортировка внутри папки
+- [ ] Восстановление из backup (restore)
+- [ ] Proxy settings — UI есть, функционал не реализован
+- [ ] Массовое выделение / batch operations
+- [ ] Favicon: force refresh / TTL (YAGNI пока)
+- [ ] Favicon: очистка orphaned файлов из Data/favicons/
+
+---
+
+## Паттерны и соглашения
+
+### Rust
+- Все команды через `state: tauri::State<AppState>`
+- `move_node`, `create_bookmark` и т.д. — параметры в snake_case (Tauri конвертирует из camelCase)
+- `CREATE_NO_WINDOW (0x0800_0000)` на все `Command::new` для консольных exe
+- `normalize_url()` — вызывается в open_url, open_url_with, refresh_thumb, fetch_favicon, check_url
+- `open_url` использует `rundll32.exe url.dll,FileProtocolHandler` (не `cmd /c start` — ненадёжно)
+- Async команды (fetch_favicon, check_url): НЕ держать MutexGuard через `.await`
+- `favicon` в DB: только filename (`github.com.png`), путь = `exe_dir/Data/favicons/{filename}`
+
+### JS
+- `allNodes` — in-memory кэш всего дерева, обновляется через `invoke('get_tree')`
+- `allFolders` — производная от `allNodes`
+- `activeFolderId` — текущая папка в grid
+- `activeBookmarkNode` — выделенная ссылка (null в list mode)
+- `dataDir` — путь к Data/ (без trailing slash, загружается в init())
+- `faviconFilePath(filename)` — `dataDir.replace(/\\/g, '/') + '/favicons/' + filename`
+- `_dragNode` — глобальное состояние DnD
+- `selectFolder(id, expand=true)` — expand=false для tree-clicks
+- `raiseOverlay(el)` — перемещает overlay в конец body для правильного z-index
+- `convertFileSrc(path)` — Tauri asset:// URL для локальных файлов
+- Все изменения в ui/ требуют `cargo build`
+
+### CSS
+- CSS переменные: `--sidebar-w`, `--col-name-w`, `--accent`, `--bg`, `--bg2`, `--bg3`, `--border`, `--text`, `--text2`, `--text-dim`
+- Light/Dark theme через `data-theme` на `<html>`
+- `.dlg-overlay` z-index: 9000, `#confirm-overlay` z-index: 10000
+- Grid layout для list rows: `grid-template-columns: 18px var(--col-name-w) 5px 1fr`
+- `.favicon-icon` — 16×16, `image-rendering: pixelated`, `object-fit: contain`
+- `#favicon-panel` — `position: fixed; bottom: 24px; left: 24px` (non-modal)
+
+---
+
+## История изменений (крупные сессии)
+
+### Сессия 1 (до 2026-05-15)
+1. Multi-DB support — `db_path: Mutex<PathBuf>`, `switch_db()`, `last_db.txt`
+2. Compact list view в правой панели вместо card grid
+3. Resizable columns (`--col-name-w` CSS var, drag handler)
+4. Resizable sidebar splitter (сохраняется в settings)
+5. Synchronized dual-pane navigation (tree ↔ grid)
+6. Drag & drop с `move_node` (circular ref validation в Rust)
+7. `normalize_url()` — https:// авто-добавление без изменения БД
+8. Tree toggle fix: `selectFolder(id, expand=false)` для tree-clicks
+9. `CREATE_NO_WINDOW` — убрано мигание консоли при открытии ссылок
+
+### Сессия 2 (2026-05-15–16)
+10. **Favicon loading** — полная система: Rust async fetch + JS queue + domain dedup + progress panel
+    - `fetch_favicon`, `get_data_dir`, `update_node_favicon` команды
+    - `is_valid_image()` — отсеивает HTML вместо иконок
+    - `faviconFilePath()` — нормализация path separators на Windows
+    - `sameIds` — domain dedup с персистентностью в DB для всех нод
+    - Favicon в дереве, гриде и detail view
+11. **Tree keyboard navigation** — ↑↓ стрелки выбирают и активируют элемент; клик фокусирует
+12. **Grid single click** → `openDetailView` (карточка); double click → открыть в браузере
+13. **`open_url`** — переход на `rundll32.exe url.dll,FileProtocolHandler`
+14. **`refresh_thumb`** — принимает width/height/timeout из настроек JS; дефолт 1280×800, 30сек
+15. **Настройки Рисунок** — кнопка "По умолчанию" (1280×800, 30сек)
+16. **Окно** — `center: true`, `minWidth: 500` (Windows Snap работает корректно)

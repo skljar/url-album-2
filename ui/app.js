@@ -4310,9 +4310,8 @@ gridEl.addEventListener("dblclick", (e) => {
     const node = allNodes.find(n => n.id === parseInt(card.dataset.id));
     if (node) selectFolder(node.id);
   } else {
-    // Double-click bookmark → open full viewer
     const node = nodeFromCard(card);
-    openDetailView(node);
+    if (node.url) openWithBrowser(node.url, getDefaultBrowserPath());
   }
 });
 

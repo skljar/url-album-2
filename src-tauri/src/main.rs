@@ -859,6 +859,25 @@ fn open_url(url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_file(path: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        std::process::Command::new("cmd")
+            .args(["/c", "start", "", &path])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open").arg(&path).spawn().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "linux")]
+    std::process::Command::new("xdg-open").arg(&path).spawn().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 fn open_url_with(url: String, browser: String) -> Result<(), String> {
     let url = normalize_url(&url);
     if browser == "default" {
@@ -1592,6 +1611,7 @@ fn main() {
             get_db_path,
             set_window_title,
             checkpoint_db,
+            open_file,
             get_data_dir,
             fetch_favicon,
             update_node_favicon,

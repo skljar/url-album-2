@@ -1499,7 +1499,7 @@ function showContextMenu(e, node) {
 
   ctxMenuEl.appendChild(
     ctxItem("image",   "Открыть рисунок",  "F12",
-      () => invoke("open_url", { url: node.thumb }), !hasThumb)
+      () => invoke("open_file", { path: node.thumb }), !hasThumb)
   );
   ctxMenuEl.appendChild(
     ctxItem("refresh", "Обновить рисунок", null,

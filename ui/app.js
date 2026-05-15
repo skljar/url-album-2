@@ -3401,6 +3401,14 @@ function buildTree() {
     else map.get(n.parent)?.children.push(map.get(n.id));
   }
 
+  // Folders always above bookmarks within each level
+  const foldersFirst = (a, b) => {
+    if (a.kind === b.kind) return 0;
+    return a.kind === 'folder' ? -1 : 1;
+  };
+  roots.sort(foldersFirst);
+  for (const node of map.values()) node.children.sort(foldersFirst);
+
   // Skip the single root wrapper node (the old "Закладки!!!" node)
   if (roots.length === 1 && roots[0].kind === "folder" && roots[0].children.length > 0) {
     return roots[0].children;

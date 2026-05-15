@@ -359,8 +359,8 @@ body {
   user-select: none;
   line-height: 1.4;
 }
-.tree-item:hover { background: var(--bg3); }
-.tree-item.active { background: var(--bg3); color: var(--text); }
+.tree-item:hover > .label { background: var(--bg3); }
+.tree-item.active > .label { background: var(--bg3); }
 
 .tree-item .arrow {
   display: inline-flex;
@@ -393,6 +393,8 @@ body {
 .tree-item .label {
   overflow: hidden;
   text-overflow: ellipsis;
+  padding: 1px 4px;
+  border-radius: 3px;
 }
 .tree-inline-rename {
   flex: 1;
@@ -424,7 +426,7 @@ body {
   font-size: 12px;
 }
 .tree-item.link:focus { outline: none; }
-.tree-item.link.active { background: var(--bg3); color: var(--text); }
+.tree-item.link.active > .label { background: var(--bg3); }
 .tree-item.link.active .tree-link-icon { color: var(--text-dim); }
 
 /* Indent children */

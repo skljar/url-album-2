@@ -242,7 +242,14 @@ async fn fetch_favicon(
 }
 
 #[tauri::command]
-fn refresh_thumb(state: tauri::State<AppState>, id: i64, url: String) -> Result<String, String> {
+fn refresh_thumb(
+    state: tauri::State<AppState>,
+    id: i64,
+    url: String,
+    width: Option<u32>,
+    height: Option<u32>,
+    timeout: Option<u32>,
+) -> Result<String, String> {
     let url = normalize_url(&url);
     let data_dir = state.db_path.lock().map_err(|e| e.to_string())?
         .parent().ok_or("no parent dir")?.to_path_buf().join("Data");
@@ -254,6 +261,10 @@ fn refresh_thumb(state: tauri::State<AppState>, id: i64, url: String) -> Result<
         .as_secs();
     let path = data_dir.join(format!("{ts}.png"));
     let path_str = path.to_string_lossy().into_owned();
+
+    let w = width.unwrap_or(1280);
+    let h = height.unwrap_or(800);
+    let t = timeout.unwrap_or(30);
 
     // Try Edge, then Chrome (headless --screenshot mode)
     let candidates = [
@@ -272,7 +283,8 @@ fn refresh_thumb(state: tauri::State<AppState>, id: i64, url: String) -> Result<
             "--disable-gpu",
             "--no-sandbox",
             "--hide-scrollbars",
-            "--window-size=1280,800",
+            &format!("--window-size={w},{h}"),
+            &format!("--timeout={}", t * 1000),
             &format!("--user-data-dir={}", tmp_dir.display()),
             &format!("--screenshot={path_str}"),
             &url,

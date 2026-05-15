@@ -952,7 +952,13 @@ async function refreshThumb(node) {
   detailLoadingOverlay.classList.add("visible");
 
   try {
-    const newPath = await invoke("refresh_thumb", { id: node.id, url: node.url });
+    const newPath = await invoke("refresh_thumb", {
+      id: node.id,
+      url: node.url,
+      width:   appSettings.thumbWidth   || 1280,
+      height:  appSettings.thumbHeight  || 800,
+      timeout: appSettings.thumbTimeout || 30,
+    });
 
     // Update state
     const n = allNodes.find(n => n.id === node.id);
@@ -2918,7 +2924,7 @@ let appSettings = {
   // Рисунок
   thumbWidth:    1280,
   thumbHeight:   800,
-  thumbTimeout:  10,
+  thumbTimeout:  30,
 };
 
 async function loadAppSettings() {
@@ -3107,7 +3113,7 @@ function applyColWidth(pct, persist = true) {
     // Рисунок
     appSettings.thumbWidth   = parseInt(document.getElementById('s-thumb-w').value)   || 1280;
     appSettings.thumbHeight  = parseInt(document.getElementById('s-thumb-h').value)   || 800;
-    appSettings.thumbTimeout = parseInt(document.getElementById('s-thumb-timeout').value) || 10;
+    appSettings.thumbTimeout = parseInt(document.getElementById('s-thumb-timeout').value) || 30;
 
     applySettings(true);
     overlay.classList.add('hidden');

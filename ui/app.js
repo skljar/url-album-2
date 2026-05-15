@@ -1518,7 +1518,6 @@ function showContextMenu(e, node) {
 
   ctxMenuEl.appendChild(ctxSep());
 
-  ctxMenuEl.appendChild(ctxItem("verify", "Проверить", "F10", null, true));
   ctxMenuEl.appendChild(ctxItem("trash",  "Удалить ссылку", "Del",
     () => deleteBookmark(node)));
 

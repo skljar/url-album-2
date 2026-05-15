@@ -152,12 +152,21 @@ async fn fetch_favicon(
                 .file_stem().unwrap_or_default()
                 .to_string_lossy().to_string();
             if stem == safe {
-                let conn = state.db.lock().map_err(|e| e.to_string())?;
-                conn.execute(
-                    "UPDATE nodes SET favicon = ?1 WHERE id = ?2",
-                    rusqlite::params![fname, id],
-                ).map_err(|e| e.to_string())?;
-                return Ok(Some(fname));
+                // Validate cached file — delete and re-fetch if corrupted
+                let file_path = favicons_dir.join(&fname);
+                if let Ok(cached) = std::fs::read(&file_path) {
+                    if is_valid_image(&cached) {
+                        let conn = state.db.lock().map_err(|e| e.to_string())?;
+                        conn.execute(
+                            "UPDATE nodes SET favicon = ?1 WHERE id = ?2",
+                            rusqlite::params![fname, id],
+                        ).map_err(|e| e.to_string())?;
+                        return Ok(Some(fname));
+                    } else {
+                        // Stale/corrupt cache — delete and re-fetch
+                        let _ = std::fs::remove_file(&file_path);
+                    }
+                }
             }
         }
     }
@@ -165,7 +174,7 @@ async fn fetch_favicon(
     // ── 4. HTTP client ───────────────────────────────────────────────────
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(8))
-        .user_agent("Mozilla/5.0 (compatible; url-album/2.0)")
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -219,13 +228,35 @@ async fn fetch_favicon(
         (raw_bytes, ext)
     };
 
-    // ── 7. Nothing found ─────────────────────────────────────────────────
+    // ── 7. Fallback: DuckDuckGo favicon service (handles Cloudflare-protected sites) ──
+    let (raw_bytes, ext) = if raw_bytes.is_none() {
+        let ddg_url = format!("https://icons.duckduckgo.com/ip3/{}.ico", domain);
+        match client.get(&ddg_url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                let ct = resp.headers()
+                    .get("content-type")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .to_string();
+                let ext = ext_from_content_type(&ct);
+                match resp.bytes().await {
+                    Ok(b) if is_valid_image(&b) => (Some(b), ext),
+                    _ => (None, "ico"),
+                }
+            }
+            _ => (None, "ico"),
+        }
+    } else {
+        (raw_bytes, ext)
+    };
+
+    // ── 8. Nothing found ─────────────────────────────────────────────────
     let bytes = match raw_bytes {
         Some(b) => b,
         None => return Ok(None),
     };
 
-    // ── 8. Save file + update DB ─────────────────────────────────────────
+    // ── 9. Save file + update DB ─────────────────────────────────────────
     let filename  = format!("{}.{}", safe, ext);
     let file_path = favicons_dir.join(&filename);
     std::fs::write(&file_path, &bytes).map_err(|e| e.to_string())?;
@@ -748,9 +779,9 @@ fn is_valid_image(bytes: &[u8]) -> bool {
     if bytes.starts_with(b"\xFF\xD8") { return true; }
     // WebP: RIFF....WEBP
     if bytes.starts_with(b"RIFF") && bytes.len() >= 12 && &bytes[8..12] == b"WEBP" { return true; }
-    // SVG: starts with < (XML/SVG content)
-    let start = std::str::from_utf8(&bytes[..bytes.len().min(32)]).unwrap_or("");
-    if start.trim_start().starts_with('<') { return true; }
+    // SVG: must start with <svg or <?xml (NOT <!DOCTYPE or <html — those are HTML error pages)
+    let start = std::str::from_utf8(&bytes[..bytes.len().min(64)]).unwrap_or("").trim_start();
+    if start.starts_with("<svg") || start.starts_with("<?xml") { return true; }
     false
 }
 

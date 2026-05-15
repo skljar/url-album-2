@@ -14,8 +14,8 @@
         "title": "URL Album",
         "width": 1200,
         "height": 750,
-        "minWidth": 800,
-        "minHeight": 500,
+        "minWidth": 500,
+        "minHeight": 400,
         "center": true
       }
     ],

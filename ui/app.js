@@ -3476,21 +3476,26 @@ function createTreeNode(node, depth) {
     // ── Drop target (folders only) ──────────────────────────────────────────
     _makeFolderDropTarget(item, node.id, childrenEl);
 
+    // Click on [+]/[-] box — toggle open/close only
+    arrow.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!childrenEl) return;
+      const opening = !childrenEl.classList.contains("open");
+      childrenEl.classList.toggle("open", opening);
+      item.classList.toggle("open", opening);
+      if (opening && appSettings.accordionTree) collapseSiblingBranches(node.id);
+    });
+
+    // Click on folder label area — highlight + show contents, no toggle
     item.addEventListener("click", (e) => {
+      if (e.target === arrow) return; // handled above
       e.stopPropagation();
       item.focus();
-      // Single click: select only, no expand/collapse (classic Win32 tree behavior)
       selectFolder(node.id, false);
     });
 
     item.addEventListener("dblclick", (e) => {
       e.stopPropagation();
-      if (childrenEl) {
-        const opening = !childrenEl.classList.contains("open");
-        childrenEl.classList.toggle("open", opening);
-        item.classList.toggle("open", opening);
-        if (opening && appSettings.accordionTree) collapseSiblingBranches(node.id);
-      }
     });
 
     item.addEventListener("contextmenu", (e) => {

@@ -360,7 +360,7 @@ body {
   line-height: 1.4;
 }
 .tree-item:hover { background: var(--bg3); }
-.tree-item.active { background: var(--accent); color: #fff; }
+.tree-item.active { background: var(--bg3); color: var(--text); }
 
 .tree-item .arrow {
   display: inline-flex;
@@ -383,9 +383,9 @@ body {
   font-size: 13px;
 }
 .tree-item.active .arrow[data-has-children] {
-  border-color: rgba(255,255,255,0.5);
-  background: rgba(255,255,255,0.15);
-  color: #fff;
+  border-color: var(--border);
+  background: var(--bg);
+  color: var(--text);
 }
 .tree-item .arrow[data-has-children]::before { content: "+"; }
 .tree-item.open > .arrow[data-has-children]::before { content: "−"; }
@@ -424,8 +424,8 @@ body {
   font-size: 12px;
 }
 .tree-item.link:focus { outline: none; }
-.tree-item.link.active { background: var(--accent); color: #fff; }
-.tree-item.link.active .tree-link-icon { color: rgba(255,255,255,0.8); }
+.tree-item.link.active { background: var(--bg3); color: var(--text); }
+.tree-item.link.active .tree-link-icon { color: var(--text-dim); }
 
 /* Indent children */
 .tree-children {
@@ -835,7 +835,7 @@ body {
 .tree-item.link.broken .tree-link-icon { color: #cc2222; opacity: 1; }
 .tree-item.link.broken > .label        { color: #cc2222; }
 .tree-item.link.broken.active .tree-link-icon,
-.tree-item.link.broken.active > .label { color: rgba(255,255,255,.9); }
+.tree-item.link.broken.active > .label { color: #cc2222; }
 
 /* ── Search results ───────────────────────────────────────────────────────── */
 #search-results {

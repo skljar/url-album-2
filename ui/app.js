@@ -1509,6 +1509,7 @@ function showContextMenu(e, node) {
     ctxItem("delimg",  "Удалить рисунок",  null,
       () => clearThumb(node), !hasThumb)
   );
+  ctxMenuEl.appendChild(ctxSep());
   ctxMenuEl.appendChild(
     ctxItem("favicon", "Загрузить favicon", null,
       () => { hideContextMenu(); loadSingleFavicon(node); },

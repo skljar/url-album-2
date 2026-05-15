@@ -4310,7 +4310,9 @@ gridEl.addEventListener("click", (e) => {
     const node = allNodes.find(n => n.id === parseInt(card.dataset.id));
     if (node) selectFolder(node.id);
   } else {
-    navigateToCard(nodeFromCard(card));
+    const node = nodeFromCard(card);
+    _activateTreeItem(node);
+    openDetailView(node);
   }
 });
 

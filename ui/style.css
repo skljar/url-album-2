@@ -396,6 +396,51 @@ body {
   padding: 1px 4px;
   border-radius: 3px;
 }
+
+/* ── Classic Windows folder icon ─────────────────────────────────────── */
+.folder-icon {
+  position: relative;
+  display: inline-block;
+  width: 16px;
+  height: 13px;
+  flex-shrink: 0;
+  vertical-align: middle;
+  margin-right: 1px;
+}
+/* Folder tab (top-left bump) */
+.folder-icon::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 6px;
+  height: 4px;
+  background: #e8a000;
+  border-radius: 2px 2px 0 0;
+}
+/* Folder body */
+.folder-icon::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 10px;
+  background: #f5c518;
+  border-radius: 1px 2px 2px 2px;
+  box-shadow: inset 0 -2px 0 rgba(0,0,0,0.10);
+}
+/* Open folder — lighter, flap raised */
+.tree-item.open .folder-icon::before {
+  background: #e8a000;
+  height: 5px;
+  width: 7px;
+  border-radius: 2px 3px 0 0;
+}
+.tree-item.open .folder-icon::after {
+  background: #fad03b;
+  box-shadow: inset 0 -2px 0 rgba(0,0,0,0.08), inset 0 2px 3px rgba(255,255,255,0.25);
+}
 .tree-inline-rename {
   flex: 1;
   min-width: 0;

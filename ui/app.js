@@ -3458,11 +3458,14 @@ function createTreeNode(node, depth) {
     arrow.className = "arrow";
     if (node.children.length > 0) arrow.dataset.hasChildren = "1";
 
+    const folderIco = document.createElement("span");
+    folderIco.className = "folder-icon";
+
     const label = document.createElement("span");
     label.className = "label";
     label.textContent = node.title;
 
-    item.append(arrow, label);
+    item.append(arrow, folderIco, label);
 
     if (node.count > 0) {
       const badge = document.createElement("span");

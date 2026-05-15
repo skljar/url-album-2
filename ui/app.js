@@ -3090,6 +3090,11 @@ function applyColWidth(pct, persist = true) {
     document.getElementById('s-thumb-w').value       = appSettings.thumbWidth;
     document.getElementById('s-thumb-h').value       = appSettings.thumbHeight;
     document.getElementById('s-thumb-timeout').value = appSettings.thumbTimeout;
+    document.getElementById('s-thumb-defaults').onclick = () => {
+      document.getElementById('s-thumb-w').value       = 1280;
+      document.getElementById('s-thumb-h').value       = 800;
+      document.getElementById('s-thumb-timeout').value = 30;
+    };
 
     raiseOverlay(overlay);
   };

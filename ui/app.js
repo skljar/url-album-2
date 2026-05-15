@@ -3496,6 +3496,11 @@ function createTreeNode(node, depth) {
 
     item.addEventListener("dblclick", (e) => {
       e.stopPropagation();
+      if (!childrenEl) return;
+      const opening = !childrenEl.classList.contains("open");
+      childrenEl.classList.toggle("open", opening);
+      item.classList.toggle("open", opening);
+      if (opening && appSettings.accordionTree) collapseSiblingBranches(node.id);
     });
 
     item.addEventListener("contextmenu", (e) => {

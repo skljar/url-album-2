@@ -4134,7 +4134,11 @@ function applyFaviconToDOM(item, filename) {
 
   for (const sid of item.sameIds) {
     const sn = allNodes.find(n => n.id === sid);
-    if (sn) sn.favicon = filename;
+    if (sn) {
+      sn.favicon = filename;
+      // Persist to DB (no HTTP — primary already fetched the file)
+      invoke('update_node_favicon', { id: sid, filename }).catch(() => {});
+    }
     updateFaviconInDOM(sid, filePath);
   }
 

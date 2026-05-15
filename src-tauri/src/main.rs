@@ -102,6 +102,20 @@ fn clear_thumb(state: tauri::State<AppState>, id: i64) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn update_node_favicon(
+    state: tauri::State<AppState>,
+    id: i64,
+    filename: String,
+) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE nodes SET favicon = ?1 WHERE id = ?2",
+        rusqlite::params![filename, id],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 fn get_data_dir(state: tauri::State<AppState>) -> Result<String, String> {
     let dir = state.db_path.lock().map_err(|e| e.to_string())?
         .parent().ok_or("no parent dir")?.to_path_buf().join("Data");
@@ -1566,6 +1580,7 @@ fn main() {
             checkpoint_db,
             get_data_dir,
             fetch_favicon,
+            update_node_favicon,
         ])
         .on_window_event(|_window, event| {
             // Checkpoint WAL into main file on every window close so data

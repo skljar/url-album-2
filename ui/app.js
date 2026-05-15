@@ -859,19 +859,30 @@ function wireMainContextFloat(trigger, buildSubFn) {
   });
 }
 
+// Tracks last sort per folder: Map<folderId, {by, desc}>
+const _sortState = new Map();
+
 function buildSortSubmenu(folderNode) {
   const sub = document.createElement("div");
   sub.className = "ctx-submenu";
-  const S = (label, by, desc) =>
-    ctxItem(null, label, null, () => { hideContextMenu(); sortFolder(folderNode, by, desc); });
-  sub.appendChild(S("По имени",                          "title",   false));
-  sub.appendChild(S("По имени (обратный порядок)",        "title",   true));
+  const cur = _sortState.get(folderNode.id);
+
+  const S = (label, by) => {
+    const active = cur?.by === by;
+    const desc   = active ? !cur.desc : false; // toggle on repeat click
+    const arrow  = active ? (cur.desc ? " ▼" : " ▲") : "";
+    return ctxItem(null, label + arrow, null, () => {
+      _sortState.set(folderNode.id, { by, desc });
+      hideContextMenu();
+      sortFolder(folderNode, by, desc);
+    });
+  };
+
+  sub.appendChild(S("По имени",         "title"));
   sub.appendChild(ctxSep());
-  sub.appendChild(S("По дате добавления",                 "created", false));
-  sub.appendChild(S("По дате добавления (обратный)",      "created", true));
+  sub.appendChild(S("По дате добавления", "created"));
   sub.appendChild(ctxSep());
-  sub.appendChild(S("По URL",                             "url",     false));
-  sub.appendChild(S("По URL (обратный порядок)",          "url",     true));
+  sub.appendChild(S("По URL",           "url"));
   return sub;
 }
 

@@ -3448,7 +3448,7 @@ function createTreeNode(node, depth) {
 
     const arrow = document.createElement("span");
     arrow.className = "arrow";
-    arrow.textContent = node.children.length > 0 ? "▶" : "";
+    if (node.children.length > 0) arrow.dataset.hasChildren = "1";
 
     const label = document.createElement("span");
     label.className = "label";

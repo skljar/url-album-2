@@ -363,15 +363,32 @@ body {
 .tree-item.active { background: var(--accent); color: #fff; }
 
 .tree-item .arrow {
-  display: inline-block;
-  width: 14px;
-  font-size: 10px;
-  color: var(--text-dim);
-  transition: transform 0.15s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-dim);
+  user-select: none;
 }
-.tree-item.open > .arrow { transform: rotate(90deg); }
-.tree-item.active .arrow { color: rgba(255,255,255,0.7); }
+.tree-item .arrow[data-has-children] {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  font-weight: bold;
+  font-size: 13px;
+}
+.tree-item.active .arrow[data-has-children] {
+  border-color: rgba(255,255,255,0.5);
+  background: rgba(255,255,255,0.15);
+  color: #fff;
+}
+.tree-item .arrow[data-has-children]::before { content: "+"; }
+.tree-item.open > .arrow[data-has-children]::before { content: "−"; }
 
 .tree-item .label {
   overflow: hidden;

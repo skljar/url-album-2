@@ -3456,6 +3456,7 @@ function createTreeNode(node, depth) {
 
     item.addEventListener("click", (e) => {
       e.stopPropagation();
+      item.focus();
       // Single click: select only, no expand/collapse (classic Win32 tree behavior)
       selectFolder(node.id, false);
     });
@@ -3495,6 +3496,7 @@ function createTreeNode(node, depth) {
 
     item.addEventListener("click", (e) => {
       e.stopPropagation();
+      item.focus();
       if (e.detail >= 2) { if (node.url) openWithBrowser(node.url, getDefaultBrowserPath()); }
       else selectTreeBookmark(node);
     });
@@ -3900,12 +3902,20 @@ treeEl.addEventListener("keydown", (e) => {
   const items = getVisibleTreeItems();
   const idx   = items.indexOf(focused);
 
-  if (e.key === "ArrowDown") {
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
     e.preventDefault();
-    items[Math.min(idx + 1, items.length - 1)]?.focus();
-  } else if (e.key === "ArrowUp") {
-    e.preventDefault();
-    items[Math.max(idx - 1, 0)]?.focus();
+    const next = e.key === "ArrowDown"
+      ? items[Math.min(idx + 1, items.length - 1)]
+      : items[Math.max(idx - 1, 0)];
+    if (!next || next === focused) return;
+    next.focus();
+    next.scrollIntoView({ block: "nearest" });
+    const id = parseInt(next.dataset.id, 10);
+    if (next.dataset.kind === "folder") selectFolder(id, false);
+    else {
+      const node = allNodes.find(n => n.id === id);
+      if (node) selectTreeBookmark(node);
+    }
   } else if (e.key === "ArrowRight" && focused.dataset.kind === "folder") {
     const ch = focused.parentElement.querySelector(":scope > .tree-children");
     if (ch && !ch.classList.contains("open")) { ch.classList.add("open"); focused.classList.add("open"); }

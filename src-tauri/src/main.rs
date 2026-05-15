@@ -166,7 +166,7 @@ async fn fetch_favicon(
                 .to_string();
             let ext = ext_from_content_type(&ct);
             match resp.bytes().await {
-                Ok(b) if b.len() > 20 => (Some(b), ext),
+                Ok(b) if is_valid_image(&b) => (Some(b), ext),
                 _ => (None, "ico"),
             }
         }
@@ -189,7 +189,7 @@ async fn fetch_favicon(
                                 .to_string();
                             let ext = ext_from_content_type(&ct);
                             match r2.bytes().await {
-                                Ok(b) if b.len() > 20 => (Some(b), ext),
+                                Ok(b) if is_valid_image(&b) => (Some(b), ext),
                                 _ => (None, "ico"),
                             }
                         }
@@ -705,6 +705,27 @@ fn ext_from_content_type(ct: &str) -> &'static str {
     else if ct.contains("gif")  { "gif"  }
     else if ct.contains("webp") { "webp" }
     else                        { "ico"  }
+}
+
+/// Returns true if the bytes look like a renderable image (not an HTML error page).
+fn is_valid_image(bytes: &[u8]) -> bool {
+    if bytes.len() < 4 { return false; }
+    // PNG: \x89PNG
+    if bytes.starts_with(b"\x89PNG") { return true; }
+    // GIF: GIF87a / GIF89a
+    if bytes.starts_with(b"GIF8") { return true; }
+    // ICO: \x00\x00\x01\x00
+    if bytes.starts_with(b"\x00\x00\x01\x00") { return true; }
+    // ICO (cursor): \x00\x00\x02\x00
+    if bytes.starts_with(b"\x00\x00\x02\x00") { return true; }
+    // JPEG: \xFF\xD8
+    if bytes.starts_with(b"\xFF\xD8") { return true; }
+    // WebP: RIFF....WEBP
+    if bytes.starts_with(b"RIFF") && bytes.len() >= 12 && &bytes[8..12] == b"WEBP" { return true; }
+    // SVG: starts with < (XML/SVG content)
+    let start = std::str::from_utf8(&bytes[..bytes.len().min(32)]).unwrap_or("");
+    if start.trim_start().starts_with('<') { return true; }
+    false
 }
 
 fn find_icon_href(html: &str, base: &str) -> Option<String> {

@@ -3482,7 +3482,7 @@ function createTreeNode(node, depth) {
     const icon = document.createElement("span");
     icon.className = "tree-link-icon";
     if (node.favicon && dataDir) {
-      setFaviconOnEl(icon, convertFileSrc(dataDir + '/favicons/' + node.favicon));
+      setFaviconOnEl(icon, convertFileSrc(faviconFilePath(node.favicon)));
     } else {
       icon.textContent = "●";
     }
@@ -3781,7 +3781,7 @@ function showDetailView(node) {
   const detailFavEl = document.getElementById('detail-favicon');
   if (detailFavEl) {
     if (node.favicon && dataDir) {
-      detailFavEl.src = convertFileSrc(dataDir + '/favicons/' + node.favicon);
+      detailFavEl.src = convertFileSrc(faviconFilePath(node.favicon));
       detailFavEl.classList.remove('hidden');
       detailFavEl.onerror = () => detailFavEl.classList.add('hidden');
     } else {
@@ -4054,7 +4054,7 @@ function createCard(b) {
   const dot = document.createElement("span");
   dot.className = "row-dot";
   if (b.favicon && dataDir) {
-    setFaviconOnEl(dot, convertFileSrc(dataDir + '/favicons/' + b.favicon));
+    setFaviconOnEl(dot, convertFileSrc(faviconFilePath(b.favicon)));
   } else {
     dot.textContent = "●";
   }
@@ -4082,11 +4082,11 @@ function extractDomain(url) {
   } catch { return null; }
 }
 
-function setFaviconOnEl(el, src) {
+function setFaviconOnEl(el, src, fallback = '●') {
   const img = document.createElement('img');
   img.src = src;
   img.className = 'favicon-icon';
-  img.onerror = () => img.remove(); // keep ● text if load fails
+  img.onerror = () => { img.remove(); if (!el.firstChild) el.textContent = fallback; };
   el.innerHTML = '';
   el.appendChild(img);
 }
@@ -4121,8 +4121,13 @@ function updateFaviconInDOM(nodeId, filePath) {
   }
 }
 
+function faviconFilePath(filename) {
+  // Normalize to forward slashes so convertFileSrc works on all platforms
+  return dataDir.replace(/\\/g, '/') + '/favicons/' + filename;
+}
+
 function applyFaviconToDOM(item, filename) {
-  const filePath = dataDir + '/favicons/' + filename;
+  const filePath = faviconFilePath(filename);
 
   const primary = allNodes.find(n => n.id === item.id);
   if (primary) primary.favicon = filename;
@@ -4202,7 +4207,9 @@ async function loadSingleFavicon(node) {
     if (filename) {
       const n = allNodes.find(n => n.id === node.id);
       if (n) n.favicon = filename;
-      updateFaviconInDOM(node.id, dataDir + '/favicons/' + filename);
+      updateFaviconInDOM(node.id, faviconFilePath(filename));
+      // Also reload right panel if this bookmark's folder is currently displayed
+      if (activeFolderId === node.parent) await loadFolderContents(activeFolderId);
     }
   } catch(e) {
     console.error('loadSingleFavicon:', e);

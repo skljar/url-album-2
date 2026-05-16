@@ -3460,6 +3460,8 @@ function createTreeNode(node, depth) {
 
     const folderIco = document.createElement("span");
     folderIco.className = "folder-icon";
+    folderIco.appendChild(_makeFolderSvg(false));
+    folderIco.appendChild(_makeFolderSvg(true));
 
     const label = document.createElement("span");
     label.className = "label";
@@ -4126,6 +4128,47 @@ function createCard(b) {
 
   card.append(dot, name, sep, addr);
   return card;
+}
+
+function _makeFolderSvg(open) {
+  const ns  = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 18 14');
+  svg.setAttribute('width',   '18');
+  svg.setAttribute('height',  '14');
+  svg.classList.add(open ? 'fsvg-open' : 'fsvg-closed');
+
+  function r(attrs) {
+    const e = document.createElementNS(ns, 'rect');
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+    svg.appendChild(e);
+  }
+  function p(d, fill) {
+    const e = document.createElementNS(ns, 'path');
+    e.setAttribute('d', d); e.setAttribute('fill', fill);
+    svg.appendChild(e);
+  }
+
+  if (!open) {
+    // ── Closed folder ───────────────────────────────────────────
+    // Body
+    r({ x:'0', y:'3.5', width:'18', height:'10.5', rx:'2', fill:'#F5C518' });
+    // Tab (darker, top-left)
+    p('M0,3.5 L0,2 Q0,0.5 1.5,0.5 L7,0.5 Q8.5,0.5 9,2 L9,3.5 Z', '#D99000');
+    // Shine at top of body
+    r({ x:'0.5', y:'4', width:'17', height:'3', rx:'1', fill:'rgba(255,255,255,0.18)' });
+  } else {
+    // ── Open folder ─────────────────────────────────────────────
+    // Back panel (dark amber, offset right)
+    r({ x:'3', y:'1', width:'15', height:'13', rx:'2', fill:'#B87800' });
+    // Back panel tab
+    p('M3,5 L3,2.5 Q3,1 4.5,1 L10,1 Q11.5,1 12,2.5 L12.5,4.5 L3,4.5 Z', '#B87800');
+    // Front panel (golden, sits in front and lower)
+    r({ x:'0', y:'5', width:'16', height:'9', rx:'2', fill:'#F5C518' });
+    // Shine on front panel
+    r({ x:'0.5', y:'5.5', width:'15', height:'2.5', rx:'1', fill:'rgba(255,255,255,0.18)' });
+  }
+  return svg;
 }
 
 function extractDomain(url) {

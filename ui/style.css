@@ -410,11 +410,9 @@ body {
 }
 .folder-icon::before,
 .folder-icon::after { display: none !important; }
-.folder-icon img {
-  width: 18px;
-  height: 16px;
-  object-fit: contain;
-  image-rendering: auto;
+.folder-icon span {
+  font-size: 14px;
+  line-height: 1;
   display: block;
 }
 

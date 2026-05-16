@@ -4131,10 +4131,10 @@ function createCard(b) {
 }
 
 function _makeFolderSvg(open) {
-  const img = document.createElement('img');
-  img.src = open ? 'icons/folder-open.png' : 'icons/folder-closed.png';
-  img.classList.add(open ? 'fsvg-open' : 'fsvg-closed');
-  return img;
+  const span = document.createElement('span');
+  span.textContent = open ? '📂' : '📁';
+  span.classList.add(open ? 'fsvg-open' : 'fsvg-closed');
+  return span;
 }
 
 function extractDomain(url) {

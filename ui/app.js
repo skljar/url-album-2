@@ -3518,6 +3518,9 @@ function createTreeNode(node, depth) {
 
     item.addEventListener("contextmenu", (e) => {
       e.stopPropagation();
+      // Highlight the folder on right-click
+      document.querySelectorAll(".tree-item.active").forEach(el => el.classList.remove("active"));
+      item.classList.add("active");
       showFolderContextMenu(e, node);
     });
 

@@ -4138,35 +4138,44 @@ function _makeFolderSvg(open) {
   svg.setAttribute('height',  '14');
   svg.classList.add(open ? 'fsvg-open' : 'fsvg-closed');
 
-  function r(attrs) {
-    const e = document.createElementNS(ns, 'rect');
+  function add(tag, attrs) {
+    const e = document.createElementNS(ns, tag);
     for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
     svg.appendChild(e);
   }
-  function p(d, fill) {
-    const e = document.createElementNS(ns, 'path');
-    e.setAttribute('d', d); e.setAttribute('fill', fill);
-    svg.appendChild(e);
-  }
+
+  const C = '#B07000'; // outline colour
+  const Y = '#FAC329'; // golden yellow
+  const D = '#E8A500'; // darker yellow (back panel)
 
   if (!open) {
-    // ── Closed folder ───────────────────────────────────────────
+    // ── Closed folder ────────────────────────────────────────────
     // Body
-    r({ x:'0', y:'3.5', width:'18', height:'10.5', rx:'2', fill:'#F5C518' });
-    // Tab (darker, top-left)
-    p('M0,3.5 L0,2 Q0,0.5 1.5,0.5 L7,0.5 Q8.5,0.5 9,2 L9,3.5 Z', '#D99000');
-    // Shine at top of body
-    r({ x:'0.5', y:'4', width:'17', height:'3', rx:'1', fill:'rgba(255,255,255,0.18)' });
+    add('rect',  { x:'0.5', y:'4.5', width:'17', height:'9', rx:'2', fill:Y, stroke:C, 'stroke-width':'0.8' });
+    // Tab (sits on top of body, shares left/bottom edges)
+    add('path',  { d:'M1.5,4.5 L1.5,2 Q1.5,1 2.5,1 L8,1 L11,4.5 Z', fill:Y, stroke:C, 'stroke-width':'0.8', 'stroke-linejoin':'round' });
+    // Cover seam between tab and body (same yellow line)
+    add('line',  { x1:'1', y1:'4.5', x2:'10.5', y2:'4.5', stroke:Y, 'stroke-width':'1' });
+    // Separator/fold line
+    add('line',  { x1:'0.5', y1:'5.2', x2:'17.5', y2:'5.2', stroke:'#D09500', 'stroke-width':'0.5' });
+    // Shine
+    add('rect',  { x:'1', y:'5.6', width:'16', height:'2.5', rx:'1.2', fill:'rgba(255,255,255,0.22)' });
   } else {
-    // ── Open folder ─────────────────────────────────────────────
-    // Back panel (dark amber, offset right)
-    r({ x:'3', y:'1', width:'15', height:'13', rx:'2', fill:'#B87800' });
+    // ── Open folder ──────────────────────────────────────────────
+    // Back panel body (shifted right 2px, same shape as closed)
+    add('rect',  { x:'2.5', y:'4.5', width:'15.5', height:'9', rx:'2', fill:D, stroke:C, 'stroke-width':'0.8' });
     // Back panel tab
-    p('M3,5 L3,2.5 Q3,1 4.5,1 L10,1 Q11.5,1 12,2.5 L12.5,4.5 L3,4.5 Z', '#B87800');
-    // Front panel (golden, sits in front and lower)
-    r({ x:'0', y:'5', width:'16', height:'9', rx:'2', fill:'#F5C518' });
-    // Shine on front panel
-    r({ x:'0.5', y:'5.5', width:'15', height:'2.5', rx:'1', fill:'rgba(255,255,255,0.18)' });
+    add('path',  { d:'M3.5,4.5 L3.5,2 Q3.5,1 4.5,1 L10,1 L13,4.5 Z', fill:D, stroke:C, 'stroke-width':'0.8', 'stroke-linejoin':'round' });
+    // Cover seam on back panel
+    add('line',  { x1:'3', y1:'4.5', x2:'12.5', y2:'4.5', stroke:D, 'stroke-width':'1' });
+    // Back panel separator line
+    add('line',  { x1:'2.5', y1:'5.2', x2:'18', y2:'5.2', stroke:'#C08500', 'stroke-width':'0.5' });
+    // Front panel (open flap, top edge slants slightly)
+    add('path',  { d:'M0.5,7 Q0.5,5.8 1.5,5.8 L15,5.2 Q16,5.2 16,6.2 L16,13 Q16,13.5 15,13.5 L1.5,13.5 Q0.5,13.5 0.5,13 Z', fill:Y, stroke:C, 'stroke-width':'0.8' });
+    // Front panel separator line
+    add('line',  { x1:'0.5', y1:'6.6', x2:'16', y2:'6', stroke:'#D09500', 'stroke-width':'0.5' });
+    // Front panel shine
+    add('rect',  { x:'1', y:'7', width:'14.5', height:'2.5', rx:'1.2', fill:'rgba(255,255,255,0.22)' });
   }
   return svg;
 }

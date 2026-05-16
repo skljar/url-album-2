@@ -410,10 +410,12 @@ body {
 }
 .folder-icon::before,
 .folder-icon::after { display: none !important; }
-.folder-icon span {
-  font-size: 14px;
-  line-height: 1;
+.folder-icon img {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
   display: block;
+  image-rendering: pixelated;
 }
 
 /* CSS switches between open/closed PNG based on .open state */

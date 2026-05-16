@@ -20,7 +20,7 @@
 C:\Projects\url-album-2\
 ├── src-tauri\               ← Rust/Tauri backend
 │   ├── src\
-│   │   ├── main.rs          ← все Tauri-команды (~1500+ строк)
+│   │   ├── main.rs          ← все Tauri-команды (~1600+ строк)
 │   │   ├── db.rs            ← SQLite схема, запросы, экспорт/импорт
 │   │   └── importer.rs      ← парсер ua.dat (Windows-1251)
 │   ├── Cargo.toml
@@ -28,13 +28,15 @@ C:\Projects\url-album-2\
 │   └── build.rs
 ├── ui\                      ← Vanilla JS frontend (встраивается в exe при сборке)
 │   ├── index.html
-│   ├── app.js               ← весь UI (~4500+ строк)
-│   └── style.css
+│   ├── app.js               ← весь UI (~4800+ строк)
+│   ├── style.css
+│   └── icons\               ← PNG иконки (встраиваются в exe)
+│       ├── folder-closed.png  ← пиксельная иконка закрытой папки
+│       └── folder-open.png    ← пиксельная иконка открытой папки
 ├── CLAUDE.md                ← этот файл
 ├── docs\superpowers\
 │   ├── specs\               ← design docs
 │   └── plans\               ← implementation plans
-├── screenshots\             ← скриншоты для сравнения/отладки
 └── Data\                    ← thumbnails/скриншоты закладок (legacy)
 ```
 
@@ -102,7 +104,8 @@ Portable-файлы рядом с exe (в `target\debug\`):
 - `sort_folder(folder_id, by, desc)` — сортировка папки
 - `sort_all_bookmarks(by, desc)` — глобальная сортировка
 - `search_bookmarks(query, by_title, by_url, by_note)` — поиск (папки + ссылки)
-- `open_url(url)` — открыть в браузере (`rundll32.exe url.dll,FileProtocolHandler`, надёжно)
+- `open_url(url)` — открыть URL в браузере (`rundll32.exe url.dll,FileProtocolHandler`)
+- `open_file(path)` — открыть локальный файл в программе по умолчанию (`cmd /c start`)
 - `open_url_with(url, browser)` — открыть в конкретном браузере
 - `check_url(url)` — HTTP-проверка ссылки
 - `create_new_db` — создать новую БД (Save File Dialog)
@@ -115,7 +118,7 @@ Portable-файлы рядом с exe (в `target\debug\`):
 - `checkpoint_db` — WAL checkpoint
 - `refresh_thumb(id, url, width?, height?, timeout?)` — скриншот через Edge/Chrome headless; принимает размер и таймаут из настроек
 - `clear_thumb(id)` / `clear_screenshots()` — очистить thumbnails
-- `fetch_favicon(id, url)` — загрузить favicon для ссылки: кэш по домену → favicon.ico → HTML fallback; `is_valid_image()` отсеивает HTML-ошибки
+- `fetch_favicon(id, url)` — загрузить favicon: кэш → favicon.ico → HTML `<link>` → DuckDuckGo → Google; `is_valid_image()` отсеивает HTML-ошибки; cache validation (перезагружает битые файлы)
 - `update_node_favicon(id, filename)` — записать favicon filename в DB (для sameIds domain dedup)
 - `import_uadat / import_uadat_pick` — импорт из старого ua.dat
 - `import_html / import_txt / import_sync` — импорт из HTML/TXT/JSON
@@ -165,14 +168,19 @@ CREATE TABLE nodes (
 - Левая панель: дерево (папки + ссылки как листья, `●` иконка или favicon 16×16)
 - Правая панель: содержимое папки (подпапки + ссылки) как compact list view
 - Два режима: list mode (grid) и viewer mode (detail view)
+- Папки **всегда выше ссылок** на каждом уровне дерева и в гриде
 
-**Поведение кликов:**
-- Tree → папка: `selectFolder(id, expand=false)` — toggle + show contents; `item.focus()` для keyboard nav
-- Tree → ссылка: `selectTreeBookmark(node)` → `openDetailView(node)` — full viewer; `item.focus()`
-- Grid single click → ссылка: `openDetailView(node)` — full viewer (карточка)
-- Grid double click → ссылка: `openWithBrowser(url)` — открыть в браузере
-- Grid single/double click → папка: `selectFolder(id)` — navigate into folder
-- Tree ↑↓ стрелки: перемещают фокус И выбирают элемент (`selectFolder` / `selectTreeBookmark`)
+**Поведение кликов — дерево:**
+- Клик на `[+]/[-]` — только toggle open/close (НЕ влияет на выделение)
+- Клик на название папки — выделение серым + показ содержимого в гриде (без toggle)
+- Двойной клик на название папки — toggle open/close
+- Клик на ссылку — `selectTreeBookmark` → `openDetailView`
+- ↑↓ стрелки — перемещают фокус И выбирают элемент
+
+**Поведение кликов — грид:**
+- Single click → ссылка: `openDetailView(node)` — full viewer (карточка)
+- Double click → ссылка: `openWithBrowser(url)` — открыть в браузере
+- Single/double click → папка: `selectFolder(id)` — navigate into folder
 
 **Компоненты UI:**
 - `#sidebar` + `#splitter` + `#main` — основной layout, splitter resizable (сохраняется в settings)
@@ -183,6 +191,16 @@ CREATE TABLE nodes (
 - Toolbar с кастомизацией (`CMD_REGISTRY`, drag & drop порядка кнопок)
 - Menubar: Файл, Ссылки, Поиск, Вид
 - Поиск: Ctrl+F, ищет по папкам + названиям + URL + заметкам
+
+**Дерево — визуальные элементы:**
+- `[+]/[-]` кнопки (CSS `::before` на `span.arrow[data-has-children]`) — toggle open/close
+- Иконки папок: `_makeFolderSvg(open)` — два `<img>` из `ui/icons/`, CSS переключает по `.open`
+  - `icons/folder-closed.png` — закрытая папка (pixel-art стиль)
+  - `icons/folder-open.png` — открытая папка (pixel-art стиль)
+  - `.fsvg-closed` / `.fsvg-open` — классы для CSS-переключения
+- Выделение: серый фон только на `.label` (не вся строка)
+- Ссылки: favicon иконка или `●` + label
+- Сортировка в меню: один пункт на поле, toggle asc/desc при повторном клике (▲/▼ индикатор)
 
 **Favicon система (JS):**
 - `MAX_FAVICON_CONCURRENCY = 5` — константа в начале app.js (intentional rate limiting)
@@ -206,13 +224,19 @@ CREATE TABLE nodes (
 - Валидация: no self-parent, no circular refs
 - После drop: `get_tree` + re-render + reload panel
 
+**Контекстное меню ссылки:**
+Открыть → Открыть с помощью → [sep] → Открыть рисунок → Обновить рисунок → Удалить рисунок → [sep] → Загрузить favicon → [sep] → Удалить ссылку → [sep] → Копировать URL → Свойства
+
+**Контекстное меню папки:**
+Экспорт → [sep] → Сортировка (toggle asc/desc) → [sep] → Проверить → Загрузить favicon'ы → Переименовать → [sep] → Удалить → [sep] → Свойства
+
 **Диалоги:**
 - "Новая ссылка": поля URL, Название, Заметка. НЕ закрывается по backdrop-клику
 - "Свойства ссылки": OK / Отмена
 - "Свойства папки": OK / Отмена
 - "Дубликаты ссылок" — full-screen двухпанельный finder
 - "Браузер-менеджер" — portable browsers.json
-- "Настройки" — вкладки: Общие, Прокси, Рисунок (с кнопкой "По умолчанию")
+- "Настройки" — вкладки: Общие, Прокси, Рисунок (кнопка "По умолчанию": 1280×800, 30сек)
 
 **Сохраняемые настройки (settings.json):**
 - `theme` — light/dark
@@ -281,6 +305,10 @@ CREATE TABLE nodes (
 - Grid layout для list rows: `grid-template-columns: 18px var(--col-name-w) 5px 1fr`
 - `.favicon-icon` — 16×16, `image-rendering: pixelated`, `object-fit: contain`
 - `#favicon-panel` — `position: fixed; bottom: 24px; left: 24px` (non-modal)
+- `.tree-item .arrow[data-has-children]::before` — `+` / `.tree-item.open > .arrow[data-has-children]::before` — `−`
+- `.tree-item:hover > .label` / `.tree-item.active > .label` — серый фон только на тексте
+- `.fsvg-closed` / `.fsvg-open` + `.tree-item.open` — CSS переключение иконок папок
+- `.folder-icon img` — `image-rendering: pixelated`, 18×18px
 
 ---
 
@@ -299,14 +327,23 @@ CREATE TABLE nodes (
 
 ### Сессия 2 (2026-05-15–16)
 10. **Favicon loading** — полная система: Rust async fetch + JS queue + domain dedup + progress panel
-    - `fetch_favicon`, `get_data_dir`, `update_node_favicon` команды
-    - `is_valid_image()` — отсеивает HTML вместо иконок
+    - `fetch_favicon` (4 стратегии: favicon.ico → HTML → DuckDuckGo → Google), `get_data_dir`, `update_node_favicon`
+    - `is_valid_image()` — magic bytes, SVG check (`<svg`/`<?xml`), отсеивает HTML
+    - Cache validation — перезагружает битые кэш-файлы автоматически
+    - Browser UA: Chrome 124 для обхода Cloudflare
     - `faviconFilePath()` — нормализация path separators на Windows
-    - `sameIds` — domain dedup с персистентностью в DB для всех нод
-    - Favicon в дереве, гриде и detail view
-11. **Tree keyboard navigation** — ↑↓ стрелки выбирают и активируют элемент; клик фокусирует
+    - `sameIds` domain dedup — все ноды домена персистируются в DB
+    - Favicon в дереве, гриде, detail view
+11. **Tree UX** — полный рефакторинг поведения:
+    - `[+]/[-]` кнопки через CSS `::before` (data-has-children)
+    - Клик на `[+]/[-]` = только toggle; клик на label = только выделение+грид; dblclick = toggle
+    - Серое выделение только на `.label` (не полная строка)
+    - ↑↓ стрелки выбирают И активируют; клик фокусирует item
+    - Папки всегда выше ссылок (`buildTree` сортирует по kind)
+    - PNG иконки папок (`ui/icons/`) — pixel-art, CSS переключает по `.open`
 12. **Grid single click** → `openDetailView` (карточка); double click → открыть в браузере
-13. **`open_url`** — переход на `rundll32.exe url.dll,FileProtocolHandler`
-14. **`refresh_thumb`** — принимает width/height/timeout из настроек JS; дефолт 1280×800, 30сек
-15. **Настройки Рисунок** — кнопка "По умолчанию" (1280×800, 30сек)
-16. **Окно** — `center: true`, `minWidth: 500` (Windows Snap работает корректно)
+13. **`open_url`** → `rundll32.exe url.dll,FileProtocolHandler`; новая `open_file` для локальных файлов
+14. **Контекстные меню** — убран "Проверить" из меню ссылки; упорядочены пункты; сортировка: один пункт + toggle asc/desc с ▲▼
+15. **`refresh_thumb`** — принимает width/height/timeout из настроек; дефолт 1280×800, 30сек; кнопка "По умолчанию"
+16. **Окно** — `center: true`, `minWidth: 500` (Windows Snap корректно)
+17. **Очистка** — удалены test screenshots, дубликаты иконок

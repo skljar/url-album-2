@@ -403,19 +403,26 @@ body {
   align-items: center;
   justify-content: center;
   width: 18px;
-  height: 14px;
+  height: 16px;
   flex-shrink: 0;
   vertical-align: middle;
-  margin-right: 1px;
+  margin-right: 2px;
 }
 .folder-icon::before,
 .folder-icon::after { display: none !important; }
+.folder-icon img {
+  width: 18px;
+  height: 16px;
+  object-fit: contain;
+  image-rendering: auto;
+  display: block;
+}
 
-/* CSS switches between two SVGs based on open state */
-.fsvg-open   { display: none; }
-.fsvg-closed { display: block; }
-.tree-item.open .fsvg-open   { display: block; }
-.tree-item.open .fsvg-closed { display: none; }
+/* CSS switches between open/closed PNG based on .open state */
+.fsvg-open   { display: none !important; }
+.fsvg-closed { display: block !important; }
+.tree-item.open .fsvg-open   { display: block !important; }
+.tree-item.open .fsvg-closed { display: none !important; }
 .tree-inline-rename {
   flex: 1;
   min-width: 0;

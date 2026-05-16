@@ -4373,7 +4373,11 @@ gridEl.addEventListener("contextmenu", (e) => {
   const card = e.target.closest(".card");
   if (!card) return;
   gridSelectRow(card);
-  if (card.dataset.kind === "folder") return; // no context menu for folders yet
+  if (card.dataset.kind === "folder") {
+    const node = allNodes.find(n => n.id === parseInt(card.dataset.id));
+    if (node) showFolderContextMenu(e, node);
+    return;
+  }
   if (!card.dataset.url) return;
   const found = allNodes.find(n => String(n.id) === String(card.dataset.id));
   const node  = found

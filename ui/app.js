@@ -2158,12 +2158,7 @@ function handleToolbarAction(id) {
       el.classList.toggle('open', !anyOpen);
       el.previousElementSibling?.classList.toggle('open', !anyOpen);
     });
-    // Update toolbar button icon + title
-    const btn = toolbarEl.querySelector('[data-tb-cmd="toggle-expand-all"]');
-    if (btn) {
-      btn.innerHTML = tbIconHtml(anyOpen ? 'expand-all' : 'collapse-all');
-      btn.title = anyOpen ? 'Развернуть все папки' : 'Свернуть все папки';
-    }
+    _syncExpandToggleUI();
     return;
   }
   if (id === 'expand-all') {
@@ -2524,6 +2519,7 @@ function buildMenubar() {
   for (const menu of MENU_DATA) {
     const group = document.createElement('div');
     group.className = 'menu-group';
+    group.dataset.id = menu.id;
 
     const lbl = document.createElement('div');
     lbl.className = 'menu-label';
@@ -2599,7 +2595,10 @@ function buildMenubar() {
       e.stopPropagation();
       const isOpen = group.classList.contains('open');
       closeAllMenus();
-      if (!isOpen) group.classList.add('open');
+      if (!isOpen) {
+        group.classList.add('open');
+        if (menu.id === 'view') _syncExpandToggleUI();
+      }
     });
 
     lbl.addEventListener('mouseenter', () => {
@@ -2615,6 +2614,20 @@ function buildMenubar() {
 
 function closeAllMenus() {
   document.querySelectorAll('.menu-group.open').forEach(g => g.classList.remove('open'));
+}
+
+function _syncExpandToggleUI() {
+  const anyOpen = !!treeEl.querySelector('.tree-children.open');
+  const label = anyOpen ? 'Свернуть все папки' : 'Развернуть все папки';
+  const icon  = anyOpen ? 'collapse-all' : 'expand-all';
+  // Menu label
+  document.querySelectorAll('.menu-entry .entry-label').forEach(el => {
+    if (el.textContent === 'Развернуть все папки' || el.textContent === 'Свернуть все папки')
+      el.textContent = label;
+  });
+  // Toolbar button
+  const btn = toolbarEl.querySelector('[data-tb-cmd="toggle-expand-all"]');
+  if (btn) { btn.innerHTML = tbIconHtml(icon); btn.title = label; }
 }
 
 function handleMenuAction(action) {
@@ -2771,10 +2784,7 @@ function handleMenuAction(action) {
         el.classList.toggle('open', !anyOpen);
         el.previousElementSibling?.classList.toggle('open', !anyOpen);
       });
-      document.querySelectorAll('.menu-entry .entry-label').forEach(el => {
-        if (el.textContent === 'Развернуть все папки' || el.textContent === 'Свернуть все папки')
-          el.textContent = anyOpen ? 'Развернуть все папки' : 'Свернуть все папки';
-      });
+      _syncExpandToggleUI();
       break;
     }
     case 'settings':

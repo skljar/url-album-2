@@ -4317,6 +4317,30 @@ function navigateToCard(node) {
   });
 }
 
+// Close all folders, open only the path to the node's parent, highlight node
+function focusTreeLink(node) {
+  // Close all open folders
+  treeEl.querySelectorAll('.tree-children.open').forEach(el => {
+    el.classList.remove('open');
+    el.previousElementSibling?.classList.remove('open');
+  });
+  // Build ancestor path from root to parent
+  const ancestors = [];
+  let cur = node.parent;
+  while (cur != null) {
+    ancestors.unshift(cur);
+    cur = allFolders.find(f => f.id === cur)?.parent ?? null;
+  }
+  // Open each ancestor folder
+  for (const id of ancestors) {
+    const item = treeEl.querySelector(`.tree-item[data-id="${id}"]`);
+    const ch   = item?.parentElement?.querySelector(':scope > .tree-children');
+    if (item && ch) { ch.classList.add('open'); item.classList.add('open'); }
+  }
+  // Highlight the link and scroll to it
+  _activateTreeItem(node);
+}
+
 // ── Grid interaction ──────────────────────────────────────────────────────
 function gridSelectRow(card) {
   gridEl.querySelectorAll(".card.selected").forEach(c => c.classList.remove("selected"));
@@ -4334,7 +4358,7 @@ gridEl.addEventListener("click", (e) => {
     if (node) selectFolder(node.id);
   } else {
     const node = nodeFromCard(card);
-    _activateTreeItem(node);
+    focusTreeLink(node);
     openDetailView(node);
   }
 });

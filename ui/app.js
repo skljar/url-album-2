@@ -3326,12 +3326,12 @@ async function showApp() {
   allFolders = allNodes.filter(n => n.kind === "folder");
   renderTree();
 
-  // Auto-select first top-level folder
+  // Highlight first top-level folder without expanding it
   const roots    = allFolders.filter(f => f.parent === null);
   const topLevel = roots.length === 1
     ? allFolders.filter(f => f.parent === roots[0].id)
     : roots;
-  if (topLevel.length > 0) selectFolder(topLevel[0].id);
+  if (topLevel.length > 0) selectFolder(topLevel[0].id, false, true);
 }
 
 // ── Drag & Drop ───────────────────────────────────────────────────────────────

@@ -2620,10 +2620,13 @@ function _syncExpandToggleUI() {
   const anyOpen = !!treeEl.querySelector('.tree-children.open');
   const label = anyOpen ? 'Свернуть все папки' : 'Развернуть все папки';
   const icon  = anyOpen ? 'collapse-all' : 'expand-all';
-  // Menu label
+  // Menu label + icon
   document.querySelectorAll('.menu-entry .entry-label').forEach(el => {
-    if (el.textContent === 'Развернуть все папки' || el.textContent === 'Свернуть все папки')
+    if (el.textContent === 'Развернуть все папки' || el.textContent === 'Свернуть все папки') {
       el.textContent = label;
+      const iconEl = el.closest('.menu-entry')?.querySelector('.entry-icon');
+      if (iconEl) iconEl.innerHTML = ICONS[icon] || '';
+    }
   });
   // Toolbar button
   const btn = toolbarEl.querySelector('[data-tb-cmd="toggle-expand-all"]');

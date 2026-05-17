@@ -3504,7 +3504,8 @@ function createTreeNode(node, depth) {
       if (e.target === arrow) return; // handled above
       e.stopPropagation();
       item.focus();
-      selectFolder(node.id, false);
+      // noTreeExpand=true: only highlight + show contents, never close open folders
+      selectFolder(node.id, false, true);
     });
 
     item.addEventListener("dblclick", (e) => {
@@ -3973,9 +3974,10 @@ treeEl.addEventListener("keydown", (e) => {
   }
 });
 
-// expand=true  → force-open the folder (navigation from right panel / programmatic)
-// expand=false → don't touch open state (tree click already toggled it)
-function selectFolder(folderId, expand = true) {
+// expand=true      → force-open the folder (navigation from right panel / programmatic)
+// expand=false     → don't touch open state (tree click already toggled it)
+// noTreeExpand=true → skip expandTreePath entirely (single-click: only highlight, never close others)
+function selectFolder(folderId, expand = true, noTreeExpand = false) {
   hideContextMenu();
   searchEl.value = "";
   searchClearBtn.classList.remove("visible");
@@ -3988,8 +3990,9 @@ function selectFolder(folderId, expand = true) {
   document.querySelectorAll(".tree-item.active")
     .forEach(el => el.classList.remove("active"));
 
-  // Always expand ancestors so the folder is reachable in the tree
-  expandTreePath(folderId);
+  // Expand ancestors (and possibly collapse siblings via accordion) —
+  // skipped on plain single-click so open folders are never closed unexpectedly
+  if (!noTreeExpand) expandTreePath(folderId);
 
   const folderTreeItem = treeEl.querySelector(`.tree-item[data-id="${folderId}"]`);
   if (folderTreeItem) {

@@ -2037,8 +2037,6 @@ const MENU_DATA = [
   {
     id: 'view', label: 'Вид',
     items: [
-      { label: 'Тёмная тема',        icon: 'gear',        action: 'toggle-theme'     },
-      '---',
       { label: 'Развернуть все папки', icon: 'expand-all', action: 'toggle-expand-all' },
       '---',
       { label: 'Настроить toolbar…', icon: 'gear',        action: 'customize-toolbar'},
@@ -2762,9 +2760,6 @@ function handleMenuAction(action) {
     case 'new-subfolder':
       doNewSubfolder();
       break;
-    case 'toggle-theme':
-      toggleTheme();
-      break;
     case 'toggle-expand-all': {
       const anyOpen = !!treeEl.querySelector('.tree-children.open');
       treeEl.querySelectorAll('.tree-children').forEach(el => {
@@ -2934,14 +2929,11 @@ let _faviconCancelled = false;
 let _faviconTotal     = 0;
 let _faviconDone      = 0;
 
-// ── Theme ─────────────────────────────────────────────────────────────────
-const themeBtn = document.getElementById("theme-btn"); // may be null after sidebar cleanup
 
 // ── App settings ──────────────────────────────────────────────────────────────
 
 let appSettings = {
   // Общие
-  theme:         'dark',
   showToolbar:   true,
   listColWidth:  42,   // % width of "Название" column
   sidebarWidth:  230,  // px
@@ -2965,10 +2957,6 @@ async function loadAppSettings() {
     const json = await invoke('load_settings');
     if (json) {
       Object.assign(appSettings, JSON.parse(json));
-    } else {
-      // Migrate theme from localStorage on first run
-      const lsTheme = localStorage.getItem('theme');
-      if (lsTheme) appSettings.theme = lsTheme;
     }
   } catch(e) {}
   applySettings(false);
@@ -2980,7 +2968,6 @@ async function saveAppSettings() {
 }
 
 function applySettings(save = true) {
-  applyTheme(appSettings.theme);
   if (typeof toolbarEl !== 'undefined') {
     if (appSettings.showToolbar) toolbarEl.classList.remove('hidden');
     else toolbarEl.classList.add('hidden');
@@ -3107,7 +3094,6 @@ function applyColWidth(pct, persist = true) {
     document.getElementById('stab-general')?.classList.add('active');
 
     // Общие
-    document.getElementById('s-theme').value        = appSettings.theme;
     document.getElementById('s-show-toolbar').checked = appSettings.showToolbar;
     document.getElementById('s-accordion').checked   = appSettings.accordionTree;
     document.getElementById('s-confirm-del').checked  = appSettings.confirmDelete;
@@ -3137,7 +3123,6 @@ function applyColWidth(pct, persist = true) {
   document.getElementById('settings-cancel').onclick = () => overlay.classList.add('hidden');
   document.getElementById('settings-ok').onclick = () => {
     // Общие
-    appSettings.theme           = document.getElementById('s-theme').value;
     appSettings.showToolbar     = document.getElementById('s-show-toolbar').checked;
     appSettings.accordionTree   = document.getElementById('s-accordion').checked;
     appSettings.confirmDelete   = document.getElementById('s-confirm-del').checked;
@@ -3159,35 +3144,6 @@ function applyColWidth(pct, persist = true) {
   overlay.addEventListener('click', e => { if (e.target === overlay) overlay.classList.add('hidden'); });
 })();
 
-// ── Theme button ───────────────────────────────────────────────────────────────
-
-function applyTheme(theme) {
-  document.documentElement.dataset.theme = theme;
-  localStorage.setItem("theme", theme); // fast cache for pre-load
-  // Update menu label to reflect current state
-  document.querySelectorAll('.menu-entry .entry-label').forEach(el => {
-    if (el.textContent === 'Тёмная тема' || el.textContent === 'Светлая тема') {
-      el.textContent = theme === 'dark' ? 'Светлая тема' : 'Тёмная тема';
-    }
-  });
-}
-
-// Immediate apply from localStorage (before async settings load)
-applyTheme(localStorage.getItem("theme") || "dark");
-
-themeBtn?.addEventListener("click", () => {
-  const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
-  appSettings.theme = next;
-  applyTheme(next);
-  saveAppSettings();
-});
-
-function toggleTheme() {
-  const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
-  appSettings.theme = next;
-  applyTheme(next);
-  saveAppSettings();
-}
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
 const importScreen = document.getElementById("import-screen");

@@ -2601,6 +2601,11 @@ function buildMenubar() {
 
   document.addEventListener('click', closeAllMenus);
   window.addEventListener('blur', closeAllMenus);
+  document.addEventListener('blur', closeAllMenus, true); // capture phase
+  // Tauri window blur event (title bar click on Windows)
+  try {
+    window.__TAURI__?.event?.listen('tauri://blur', closeAllMenus);
+  } catch(e) {}
 }
 
 function closeAllMenus() {

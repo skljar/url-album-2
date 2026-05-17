@@ -2100,7 +2100,7 @@ const DEFAULT_TOOLBAR = [
   'delete-link', 'properties', '|',
   'find', '|',
   'check-all-links', '|',
-  'expand-all', 'collapse-all',
+  'toggle-expand-all',
 ];
 
 let toolbarConfig = [...DEFAULT_TOOLBAR];
@@ -2160,16 +2160,6 @@ function handleToolbarAction(id) {
     });
     _syncExpandToggleUI();
     return;
-  }
-  if (id === 'expand-all') {
-    treeEl.querySelectorAll('.tree-children').forEach(el => {
-      el.classList.add('open'); el.previousElementSibling?.classList.add('open');
-    }); return;
-  }
-  if (id === 'collapse-all') {
-    treeEl.querySelectorAll('.tree-children').forEach(el => {
-      el.classList.remove('open'); el.previousElementSibling?.classList.remove('open');
-    }); return;
   }
   if (id === 'move-up')   { tbMoveItem(-1); return; }
   if (id === 'move-down') { tbMoveItem(+1); return; }
@@ -2768,18 +2758,6 @@ function handleMenuAction(action) {
       break;
     case 'toggle-theme':
       toggleTheme();
-      break;
-    case 'expand-all':
-      treeEl.querySelectorAll('.tree-children').forEach(el => {
-        el.classList.add('open');
-        el.previousElementSibling?.classList.add('open');
-      });
-      break;
-    case 'collapse-all':
-      treeEl.querySelectorAll('.tree-children').forEach(el => {
-        el.classList.remove('open');
-        el.previousElementSibling?.classList.remove('open');
-      });
       break;
     case 'toggle-expand-all': {
       const anyOpen = !!treeEl.querySelector('.tree-children.open');

@@ -2600,6 +2600,7 @@ function buildMenubar() {
   }
 
   document.addEventListener('click', closeAllMenus);
+  window.addEventListener('blur', closeAllMenus);
 }
 
 function closeAllMenus() {

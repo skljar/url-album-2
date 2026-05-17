@@ -2064,8 +2064,6 @@ const CMD_REGISTRY = [
   { id:'clear-thumb',         label:'Удалить рисунок',           icon:'delimg',      group:'Правка',                                action:'clear-thumb' },
   // Навигация
   { id:'toggle-expand-all',   label:'Развернуть/Свернуть все',   icon:'expand-all',  group:'Навигация',                             action:'toggle-expand-all' },
-  { id:'expand-all',          label:'Открыть все папки',         icon:'expand-all',  group:'Навигация',                             action:'expand-all' },
-  { id:'collapse-all',        label:'Закрыть все папки',         icon:'collapse-all',group:'Навигация',                             action:'collapse-all' },
   { id:'move-up',             label:'Переместить вверх',         icon:'move-up',     group:'Навигация',                             action:'move-up' },
   { id:'move-down',           label:'Переместить вниз',          icon:'move-down',   group:'Навигация',                             action:'move-down' },
   // Поиск

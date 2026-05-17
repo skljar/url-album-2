@@ -2063,6 +2063,7 @@ const CMD_REGISTRY = [
   { id:'refresh-thumb',       label:'Обновить рисунок',          icon:'refresh',     group:'Правка',                                action:'refresh-thumb' },
   { id:'clear-thumb',         label:'Удалить рисунок',           icon:'delimg',      group:'Правка',                                action:'clear-thumb' },
   // Навигация
+  { id:'toggle-expand-all',   label:'Развернуть/Свернуть все',   icon:'expand-all',  group:'Навигация',                             action:'toggle-expand-all' },
   { id:'expand-all',          label:'Открыть все папки',         icon:'expand-all',  group:'Навигация',                             action:'expand-all' },
   { id:'collapse-all',        label:'Закрыть все папки',         icon:'collapse-all',group:'Навигация',                             action:'collapse-all' },
   { id:'move-up',             label:'Переместить вверх',         icon:'move-up',     group:'Навигация',                             action:'move-up' },
@@ -2139,6 +2140,7 @@ function buildToolbar() {
     if (!cmd) continue;
     const btn = document.createElement('button');
     btn.className = 'tb-btn';
+    btn.dataset.tbCmd = cmd.id;
     const hint = cmd.shortcut ? `${cmd.label} (${cmd.shortcut})` : cmd.label;
     btn.title = hint;
     btn.innerHTML = tbIconHtml(cmd.icon);
@@ -2152,6 +2154,20 @@ function handleToolbarAction(id) {
   const cmd = CMD_REGISTRY.find(c => c.id === id);
   if (!cmd) return;
   // Special local actions (not going through handleMenuAction)
+  if (id === 'toggle-expand-all') {
+    const anyOpen = !!treeEl.querySelector('.tree-children.open');
+    treeEl.querySelectorAll('.tree-children').forEach(el => {
+      el.classList.toggle('open', !anyOpen);
+      el.previousElementSibling?.classList.toggle('open', !anyOpen);
+    });
+    // Update toolbar button icon + title
+    const btn = toolbarEl.querySelector('[data-tb-cmd="toggle-expand-all"]');
+    if (btn) {
+      btn.innerHTML = tbIconHtml(anyOpen ? 'expand-all' : 'collapse-all');
+      btn.title = anyOpen ? 'Развернуть все папки' : 'Свернуть все папки';
+    }
+    return;
+  }
   if (id === 'expand-all') {
     treeEl.querySelectorAll('.tree-children').forEach(el => {
       el.classList.add('open'); el.previousElementSibling?.classList.add('open');

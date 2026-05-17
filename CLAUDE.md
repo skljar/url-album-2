@@ -162,7 +162,7 @@ CREATE TABLE nodes (
 );
 ```
 
-### Frontend (app.js / ~4500+ строк)
+### Frontend (app.js / ~4900+ строк)
 
 **Навигационная модель:**
 - Левая панель: дерево (папки + ссылки как листья, `●` иконка или favicon 16×16)
@@ -171,16 +171,24 @@ CREATE TABLE nodes (
 - Папки **всегда выше ссылок** на каждом уровне дерева и в гриде
 
 **Поведение кликов — дерево:**
-- Клик на `[+]/[-]` — только toggle open/close (НЕ влияет на выделение)
-- Клик на название папки — выделение серым + показ содержимого в гриде (без toggle)
-- Двойной клик на название папки — toggle open/close
+- Клик на `[+]/[-]` — только toggle open/close (НЕ влияет на выделение, НЕ закрывает другие папки)
+- Клик на название папки — выделение серым + показ содержимого в гриде (без toggle, без accordion)
+- Двойной клик на название папки — toggle open/close (только эта папка, остальные не трогает)
+- Правый клик на папку — выделяет и показывает контекстное меню
 - Клик на ссылку — `selectTreeBookmark` → `openDetailView`
 - ↑↓ стрелки — перемещают фокус И выбирают элемент
+
+**Важно:** `selectFolder(id, expand, noTreeExpand)`:
+- `expand=false, noTreeExpand=true` — только выделение+грид, ничего не раскрывает и не закрывает
+- Accordion mode (`collapseSiblingBranches`) намеренно убран из всех click/dblclick обработчиков дерева
+
+**При старте:** все папки закрыты, первая папка только подсвечивается (не раскрывается)
 
 **Поведение кликов — грид:**
 - Single click → ссылка: `openDetailView(node)` — full viewer (карточка)
 - Double click → ссылка: `openWithBrowser(url)` — открыть в браузере
 - Single/double click → папка: `selectFolder(id)` — navigate into folder
+- Правый клик → папка: `showFolderContextMenu` (работает и в гриде, и в дереве)
 
 **Компоненты UI:**
 - `#sidebar` + `#splitter` + `#main` — основной layout, splitter resizable (сохраняется в settings)
@@ -191,6 +199,7 @@ CREATE TABLE nodes (
 - Toolbar с кастомизацией (`CMD_REGISTRY`, drag & drop порядка кнопок)
 - Menubar: Файл, Ссылки, Поиск, Вид
 - Поиск: Ctrl+F, ищет по папкам + названиям + URL + заметкам
+- Меню закрывается при `window.blur` (клик на titlebar, Alt+Tab)
 
 **Дерево — визуальные элементы:**
 - `[+]/[-]` кнопки (CSS `::before` на `span.arrow[data-has-children]`) — toggle open/close
@@ -201,6 +210,8 @@ CREATE TABLE nodes (
 - Выделение: серый фон только на `.label` (не вся строка)
 - Ссылки: favicon иконка или `●` + label
 - Сортировка в меню: один пункт на поле, toggle asc/desc при повторном клике (▲/▼ индикатор)
+- Меню "Вид": один пункт "Развернуть/Свернуть все папки" — toggle, синхронизирован с toolbar кнопкой через `_syncExpandToggleUI()` (обновляет текст+иконку в обоих местах)
+- `group.dataset.id = menu.id` — для идентификации меню при открытии (вызов sync при открытии "Вид")
 
 **Favicon система (JS):**
 - `MAX_FAVICON_CONCURRENCY = 5` — константа в начале app.js (intentional rate limiting)
@@ -264,7 +275,7 @@ CREATE TABLE nodes (
 - `thumb` хранит полный абсолютный путь в DB (legacy, в отличие от `favicon` который хранит только filename)
 
 ### Что НЕ сделано
-- [ ] Контекстное меню для папок в правой панели (только в дереве)
+- [x] Контекстное меню для папок в правой панели — реализовано
 - [ ] Drag & drop сортировка внутри папки
 - [ ] Восстановление из backup (restore)
 - [ ] Proxy settings — UI есть, функционал не реализован
@@ -293,7 +304,7 @@ CREATE TABLE nodes (
 - `dataDir` — путь к Data/ (без trailing slash, загружается в init())
 - `faviconFilePath(filename)` — `dataDir.replace(/\\/g, '/') + '/favicons/' + filename`
 - `_dragNode` — глобальное состояние DnD
-- `selectFolder(id, expand=true)` — expand=false для tree-clicks
+- `selectFolder(id, expand=true, noTreeExpand=false)` — expand=false для tree-clicks, noTreeExpand=true чтобы не трогать состояние дерева вообще
 - `raiseOverlay(el)` — перемещает overlay в конец body для правильного z-index
 - `convertFileSrc(path)` — Tauri asset:// URL для локальных файлов
 - Все изменения в ui/ требуют `cargo build`
@@ -347,3 +358,18 @@ CREATE TABLE nodes (
 15. **`refresh_thumb`** — принимает width/height/timeout из настроек; дефолт 1280×800, 30сек; кнопка "По умолчанию"
 16. **Окно** — `center: true`, `minWidth: 500` (Windows Snap корректно)
 17. **Очистка** — удалены test screenshots, дубликаты иконок
+
+### Сессия 3 (2026-05-17–18)
+18. **Tree UX — доработки:**
+    - `selectFolder(id, false, true)` — noTreeExpand=true: одиночный клик не трогает дерево вообще
+    - `[+]/[-]` и dblclick НЕ вызывают `collapseSiblingBranches` — все папки независимы
+    - При старте: все папки закрыты, первая только подсвечена
+    - Правый клик по папке в дереве — подсвечивает папку (добавлен `.active`)
+    - Правый клик по папке в гриде — `showFolderContextMenu` (было `return`)
+19. **Меню "Вид"** — один toggle-пункт вместо двух:
+    - `toggle-expand-all` в `CMD_REGISTRY`, `MENU_DATA`, `handleMenuAction`, `handleToolbarAction`
+    - `_syncExpandToggleUI()` — синхронизирует текст+иконку меню и toolbar кнопки
+    - Вызывается при открытии меню "Вид" и после каждого toggle
+    - `expand-all` / `collapse-all` полностью удалены (из CMD_REGISTRY, handlers, DEFAULT_TOOLBAR)
+20. **Меню закрывается** при `window.blur` (клик на titlebar, Alt+Tab)
+21. **`group.dataset.id = menu.id`** — добавлен в buildMenubar для идентификации групп меню

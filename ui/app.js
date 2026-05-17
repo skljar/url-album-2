@@ -2757,12 +2757,12 @@ function handleMenuAction(action) {
         el.classList.toggle('open', !anyOpen);
         el.previousElementSibling?.classList.toggle('open', !anyOpen);
       });
-      // Update menu label to reflect new state
       document.querySelectorAll('.menu-entry .entry-label').forEach(el => {
         if (el.textContent === 'Развернуть все папки' || el.textContent === 'Свернуть все папки')
           el.textContent = anyOpen ? 'Развернуть все папки' : 'Свернуть все папки';
       });
       break;
+    }
     case 'settings':
       openSettingsDialog();
       break;

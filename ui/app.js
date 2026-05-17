@@ -2039,8 +2039,7 @@ const MENU_DATA = [
     items: [
       { label: 'Тёмная тема',        icon: 'gear',        action: 'toggle-theme'     },
       '---',
-      { label: 'Открыть все папки',  icon: 'expand-all',  action: 'expand-all'       },
-      { label: 'Закрыть все папки', icon: 'collapse-all', action: 'collapse-all'     },
+      { label: 'Развернуть все папки', icon: 'expand-all', action: 'toggle-expand-all' },
       '---',
       { label: 'Настроить toolbar…', icon: 'gear',        action: 'customize-toolbar'},
     ]
@@ -2750,6 +2749,18 @@ function handleMenuAction(action) {
       treeEl.querySelectorAll('.tree-children').forEach(el => {
         el.classList.remove('open');
         el.previousElementSibling?.classList.remove('open');
+      });
+      break;
+    case 'toggle-expand-all': {
+      const anyOpen = !!treeEl.querySelector('.tree-children.open');
+      treeEl.querySelectorAll('.tree-children').forEach(el => {
+        el.classList.toggle('open', !anyOpen);
+        el.previousElementSibling?.classList.toggle('open', !anyOpen);
+      });
+      // Update menu label to reflect new state
+      document.querySelectorAll('.menu-entry .entry-label').forEach(el => {
+        if (el.textContent === 'Развернуть все папки' || el.textContent === 'Свернуть все папки')
+          el.textContent = anyOpen ? 'Развернуть все папки' : 'Свернуть все папки';
       });
       break;
     case 'settings':

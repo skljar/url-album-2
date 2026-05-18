@@ -1954,13 +1954,6 @@ const MENU_DATA = [
       { label: 'Создать базу',   icon: 'db',     action: 'new-db'  },
       { label: 'Открыть базу',   icon: 'db',     action: 'open-db' },
       '---',
-      { label: 'Импорт', icon: 'import', sub: [
-        { label: 'Из браузера…',    icon: 'browser', action: 'import-from-browser' },
-        '---',
-        { label: 'Из файла HTML',   icon: 'import',  action: 'import-html'      },
-        { label: 'Из файла TXT',    icon: 'import',  action: 'import-txt-lines' },
-        { label: 'Из ua.dat…',     icon: 'folder',  action: 'import-folder'    },
-      ]},
       { label: 'Экспорт', icon: 'backup', sub: [
         { label: 'HTML файл',        icon: 'import',  action: 'export-html' },
         { label: 'TXT файл',         icon: 'import',  action: 'export-txt'  },

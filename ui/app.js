@@ -2626,6 +2626,37 @@ function tbMoveItem(dir) {
   overlay.addEventListener('click', e => { if (e.target === overlay) overlay.classList.add('hidden'); });
 })();
 
+function _populateRecentDbs(drop) {
+  const recentEntry = drop.querySelector('.menu-entry.has-sub[data-recent-dbs]');
+  if (!recentEntry) return;
+  const subEl = recentEntry.querySelector('.menu-sub');
+  if (!subEl) return;
+  invoke('get_recent_dbs').then(paths => {
+    subEl.innerHTML = '';
+    if (paths.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'menu-entry disabled';
+      empty.innerHTML = '<span class="entry-icon"></span><span class="entry-label">(пусто)</span>';
+      subEl.appendChild(empty);
+      return;
+    }
+    for (const p of paths) {
+      const name = p.split(/[\\/]/).pop();
+      const el = document.createElement('div');
+      el.className = 'menu-entry';
+      el.innerHTML = `<span class="entry-icon">${ICONS['db'] || ''}</span><span class="entry-label" title="${p}">${name}</span>`;
+      el.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        closeAllMenus();
+        invoke('switch_db', { newPath: p })
+          .then(() => showApp())
+          .catch(console.error);
+      });
+      subEl.appendChild(el);
+    }
+  }).catch(() => {});
+}
+
 function buildMenubar() {
   const bar = document.getElementById('menubar');
 
@@ -2691,6 +2722,7 @@ function buildMenubar() {
           subEl.appendChild(se);
         }
         entry.appendChild(subEl);
+        if (item._dynamic) entry.dataset.recentDbs = '1';
       } else if (!item.todo) {
         entry.addEventListener('click', (e) => {
           e.stopPropagation();
@@ -2711,6 +2743,7 @@ function buildMenubar() {
       if (!isOpen) {
         group.classList.add('open');
         if (menu.id === 'view') _syncExpandToggleUI();
+        if (menu.id === 'file') _populateRecentDbs(drop);
       }
     });
 
@@ -2718,6 +2751,7 @@ function buildMenubar() {
       if (document.querySelector('.menu-group.open')) {
         closeAllMenus();
         group.classList.add('open');
+        if (menu.id === 'file') _populateRecentDbs(drop);
       }
     });
   }

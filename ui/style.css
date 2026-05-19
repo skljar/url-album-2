@@ -1525,4 +1525,4 @@ body {
 /* ── DB Properties dialog ──────────────────────────────────────────────────── */
 .dbprops-footer { justify-content: space-between; }
 .win-btn-danger { color: #c00; }
-.win-btn-danger:not(:disabled):hover { background: #c00; color: #fff; border-color: #c00; }
+.win-btn.win-btn-danger:not(:disabled):hover { background: #c00; color: #fff; border-color: #c00; }

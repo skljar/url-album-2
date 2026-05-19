@@ -427,6 +427,43 @@ document.getElementById('fv-close-btn').addEventListener('click', () => {
   hideFaviconPanel();
 });
 
+function showThumbPanel(total) {
+  _thumbTotal = total;
+  _thumbDone  = 0;
+  document.getElementById('tp-done').textContent  = '0';
+  document.getElementById('tp-total').textContent = total;
+  document.getElementById('tp-bar-fill').style.width = '0%';
+  document.getElementById('tp-label').textContent   = '';
+  document.getElementById('thumb-panel').classList.remove('hidden');
+}
+
+function _updateThumbPanelProgress() {
+  document.getElementById('tp-done').textContent = _thumbDone;
+  const pct = _thumbTotal > 0 ? Math.round(_thumbDone / _thumbTotal * 100) : 0;
+  document.getElementById('tp-bar-fill').style.width = pct + '%';
+}
+
+function hideThumbPanel() {
+  document.getElementById('thumb-panel').classList.add('hidden');
+}
+
+function _finishThumbBatch() {
+  document.getElementById('tp-label').textContent = 'Готово';
+  setTimeout(hideThumbPanel, 2000);
+}
+
+document.getElementById('tp-cancel-btn').addEventListener('click', () => {
+  _thumbCancelled = true;
+  _thumbQueue = [];
+  hideThumbPanel();
+});
+
+document.getElementById('tp-close-btn').addEventListener('click', () => {
+  _thumbCancelled = true;
+  _thumbQueue = [];
+  hideThumbPanel();
+});
+
 // ── Duplicate finder ─────────────────────────────────────────────────────
 // ── Duplicates finder (full utility) ─────────────────────────────────────────
 
@@ -2922,6 +2959,13 @@ let _faviconCancelled = false;
 let _faviconTotal     = 0;
 let _faviconDone      = 0;
 
+// ── Thumb batch state ─────────────────────────────────────────────────────
+const MAX_THUMB_CONCURRENCY = 2;
+let _thumbQueue     = [];   // Array<{id, url, title}>
+let _thumbActive    = 0;
+let _thumbCancelled = false;
+let _thumbTotal     = 0;
+let _thumbDone      = 0;
 
 // ── App settings ──────────────────────────────────────────────────────────────
 

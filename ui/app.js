@@ -412,6 +412,8 @@ function hideFaviconPanel() {
 
 function _finishFaviconBatch() {
   document.getElementById('fv-domain').textContent = 'Готово';
+  renderTree();
+  if (activeFolderId != null) loadFolderContents(activeFolderId);
   setTimeout(hideFaviconPanel, 2000);
 }
 

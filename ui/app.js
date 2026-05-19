@@ -2881,26 +2881,6 @@ function handleMenuAction(action) {
       if (url) navigator.clipboard.writeText(url).catch(() => {});
       break;
     }
-    case 'export-html': {
-      const t = getActiveLink();
-      const fid = t?.parent ?? activeFolderId;
-      if (fid != null) invoke("export_folder_html", { folderId: fid }).catch(console.error);
-      break;
-    }
-    case 'export-txt': {
-      const t = getActiveLink();
-      const fid = t?.parent ?? activeFolderId;
-      if (fid != null) invoke("export_folder_txt", { folderId: fid }).catch(console.error);
-      break;
-    }
-    case 'check-links': {
-      const t = getActiveLink();
-      const fid = t?.parent ?? activeFolderId;
-      const fn = fid != null ? allNodes.find(n => n.id === fid && n.kind === "folder") : null;
-      if (fn) openCheckerPanel(fn);
-      break;
-    }
-
     case 'delete-link': {
       const t = activeBookmarkNode
         || allNodes.find(n => String(n.id) === gridEl.querySelector(".card.selected")?.dataset.id);

@@ -3112,7 +3112,7 @@ let _faviconTotal     = 0;
 let _faviconDone      = 0;
 
 // ── Thumb batch state ─────────────────────────────────────────────────────
-const MAX_THUMB_CONCURRENCY = 1;
+const MAX_THUMB_CONCURRENCY = 3;
 let _thumbQueue     = [];   // Array<{id, url, title}>
 let _thumbActive    = 0;
 let _thumbCancelled = false;

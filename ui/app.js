@@ -4319,6 +4319,67 @@ function startFaviconBatch(folderNode, recursive = true) {
   startFaviconWorkers();
 }
 
+function _runThumbWorker() {
+  if (_thumbCancelled || _thumbQueue.length === 0 || _thumbActive >= MAX_THUMB_CONCURRENCY) return;
+  _thumbActive++;
+  const item = _thumbQueue.shift();
+
+  const labelEl = document.getElementById('tp-label');
+  if (labelEl) labelEl.textContent = item.title || item.url;
+
+  invoke('refresh_thumb', {
+    id:      item.id,
+    url:     item.url,
+    width:   appSettings.thumbWidth   || 1280,
+    height:  appSettings.thumbHeight  || 800,
+    timeout: appSettings.thumbTimeout || 30,
+  })
+    .then(newPath => {
+      if (!newPath) return;
+      const n = allNodes.find(n => n.id === item.id);
+      if (n) n.thumb = newPath;
+      // Update grid card if visible
+      const card = gridEl.querySelector(`.card[data-id="${item.id}"]`);
+      if (card) {
+        card.dataset.thumb = newPath;
+        const thumbDiv = card.querySelector('.card-thumb');
+        if (thumbDiv) {
+          thumbDiv.innerHTML = '';
+          const img = document.createElement('img');
+          img.src = convertFileSrc(newPath);
+          img.onerror = () => { img.remove(); thumbDiv.appendChild(makeNoImg(item.title)); };
+          thumbDiv.appendChild(img);
+        }
+      }
+    })
+    .catch(() => {})
+    .finally(() => {
+      _thumbDone++;
+      _thumbActive--;
+      _updateThumbPanelProgress();
+      if (_thumbQueue.length === 0 && _thumbActive === 0) {
+        _finishThumbBatch();
+      } else {
+        _runThumbWorker();
+      }
+    });
+}
+
+function startThumbBatch(folderNode) {
+  _thumbCancelled = false;
+  _thumbQueue     = [];
+  _thumbActive    = 0;
+
+  const bookmarks = allNodes.filter(
+    n => n.parent === folderNode.id && n.kind === 'bookmark' && n.url
+  );
+  if (bookmarks.length === 0) return;
+
+  _thumbQueue = bookmarks.map(n => ({ id: n.id, url: n.url, title: n.title }));
+  showThumbPanel(_thumbQueue.length);
+  for (let i = 0; i < MAX_THUMB_CONCURRENCY; i++) _runThumbWorker();
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 function makeNoImg(title) {

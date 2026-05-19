@@ -3492,10 +3492,9 @@ let _dragExpandTimer = null;
 
 function _isDragValid(targetFolderId) {
   if (!_dragNode) return false;
-  if (_dragNode.id === targetFolderId) return false;          // self
-  if (_dragNode.parent === targetFolderId) return false;      // already there
+  if (_dragNode.id === targetFolderId) return false;
   if (_dragNode.kind === 'folder') {
-    // Walk from target up to root — reject if we pass through dragNode.id
+    // No circular refs: walk up from target, reject if we hit dragNode
     let cur = allNodes.find(n => n.id === targetFolderId);
     while (cur) {
       if (cur.id === _dragNode.id) return false;
@@ -3515,47 +3514,83 @@ async function _doDrop(targetFolderId) {
     allFolders = allNodes.filter(n => n.kind === 'folder');
     renderTree();
     restoreOpenState(openIds);
-    // Expand the target so the dropped item is visible
     const ti = treeEl.querySelector(`.tree-item[data-id="${targetFolderId}"]`);
     const ch = ti?.parentElement?.querySelector(':scope > .tree-children');
     if (ti && ch) { ch.classList.add('open'); ti.classList.add('open'); }
-    // Reload right panel
     if (activeFolderId != null) await loadFolderContents(activeFolderId);
   } catch(e) { console.error('move_node:', e); }
 }
 
-// Attach DnD drop-target behaviour to a folder element
-function _makeFolderDropTarget(el, folderId, childrenEl) {
-  el.addEventListener('dragover', (e) => {
-    if (!_isDragValid(folderId)) return;
+// ── DnD via event delegation on containers ────────────────────────────────
+
+function _clearDragOver() {
+  treeEl.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+  gridEl.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+  clearTimeout(_dragExpandTimer); _dragExpandTimer = null;
+}
+
+function _initDragDrop() {
+  // ── Tree drop target ──────────────────────────────────────────────────────
+  treeEl.addEventListener('dragover', (e) => {
+    if (!_dragNode) return;
+    const folderEl = e.target.closest('.tree-item:not(.link)');
+    if (!folderEl) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
-    el.classList.add('drag-over');
-    // Auto-expand collapsed folder after 650ms hover
-    if (childrenEl && !childrenEl.classList.contains('open')) {
-      if (!_dragExpandTimer) {
+    if (!folderEl.classList.contains('drag-over')) {
+      _clearDragOver();
+      folderEl.classList.add('drag-over');
+      // Auto-expand after 650ms
+      const childrenEl = folderEl.parentElement?.querySelector(':scope > .tree-children');
+      if (childrenEl && !childrenEl.classList.contains('open')) {
         _dragExpandTimer = setTimeout(() => {
           childrenEl.classList.add('open');
-          el.classList.add('open');
+          folderEl.classList.add('open');
         }, 650);
       }
     }
   });
-  el.addEventListener('dragleave', (e) => {
-    if (!el.contains(e.relatedTarget)) {
-      el.classList.remove('drag-over');
-      clearTimeout(_dragExpandTimer);
-      _dragExpandTimer = null;
+
+  treeEl.addEventListener('dragleave', (e) => {
+    if (!treeEl.contains(e.relatedTarget)) _clearDragOver();
+  });
+
+  treeEl.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    const folderEl = e.target.closest('.tree-item:not(.link)');
+    _clearDragOver();
+    if (!folderEl) return;
+    await _doDrop(Number(folderEl.dataset.id));
+  });
+
+  // ── Grid drop target ──────────────────────────────────────────────────────
+  gridEl.addEventListener('dragover', (e) => {
+    if (!_dragNode) return;
+    const folderEl = e.target.closest('.card-folder');
+    if (!folderEl) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (!folderEl.classList.contains('drag-over')) {
+      _clearDragOver();
+      folderEl.classList.add('drag-over');
     }
   });
-  el.addEventListener('drop', async (e) => {
+
+  gridEl.addEventListener('dragleave', (e) => {
+    if (!gridEl.contains(e.relatedTarget)) _clearDragOver();
+  });
+
+  gridEl.addEventListener('drop', async (e) => {
     e.preventDefault();
-    el.classList.remove('drag-over');
-    clearTimeout(_dragExpandTimer);
-    _dragExpandTimer = null;
-    await _doDrop(folderId);
+    const folderEl = e.target.closest('.card-folder');
+    _clearDragOver();
+    if (!folderEl) return;
+    await _doDrop(Number(folderEl.dataset.id));
   });
 }
+
+// kept for compatibility — no-op now that we use delegation
+function _makeFolderDropTarget(_el, _folderId, _childrenEl) {}
 
 // ── Tree ──────────────────────────────────────────────────────────────────
 function buildTree() {
@@ -4630,4 +4665,5 @@ gridEl.addEventListener("contextmenu", (e) => {
 
 // ── Start ─────────────────────────────────────────────────────────────────
 buildMenubar();
+_initDragDrop();
 init();

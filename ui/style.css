@@ -1473,7 +1473,9 @@ body {
   align-items: center;
   justify-content: space-between;
   user-select: none;
+  cursor: grab;
 }
+#tp-titlebar:active { cursor: grabbing; }
 #tp-title { font-size: 12px; }
 #tp-close-btn {
   background: none;

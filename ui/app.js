@@ -464,6 +464,8 @@ document.getElementById('tp-close-btn').addEventListener('click', () => {
   hideThumbPanel();
 });
 
+makeDlgDraggable(document.getElementById('thumb-panel'), document.getElementById('tp-titlebar'));
+
 // ── Duplicate finder ─────────────────────────────────────────────────────
 // ── Duplicates finder (full utility) ─────────────────────────────────────────
 

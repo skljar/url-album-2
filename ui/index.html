@@ -508,6 +508,24 @@
     </div>
   </div>
 
+  <!-- Thumb batch panel (non-modal background task) -->
+  <div id="thumb-panel" class="hidden">
+    <div id="tp-titlebar">
+      <span id="tp-title">Загрузка рисунков</span>
+      <button id="tp-close-btn" title="Закрыть">×</button>
+    </div>
+    <div id="tp-body">
+      <div id="tp-info-row">
+        <span>рисунки: <b id="tp-done">0</b>/<b id="tp-total">0</b></span>
+        <span id="tp-label"></span>
+      </div>
+      <div id="tp-bar-track"><div id="tp-bar-fill"></div></div>
+      <div id="tp-btn-row">
+        <button class="win-btn" id="tp-cancel-btn">Отмена</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Context menu (built entirely by JS) -->
   <div id="ctx-menu" class="hidden"></div>
 

@@ -2827,6 +2827,47 @@ function handleMenuAction(action) {
     case 'quit':
       invoke('checkpoint_db').catch(() => {}).finally(() => window.close());
       break;
+
+    case 'close-db':
+      invoke('close_db').catch(console.error);
+      showImportScreen();
+      break;
+
+    case 'db-properties':
+      openDbPropertiesDialog();
+      break;
+
+    case 'manage-browsers':
+      openBrowsersDialog();
+      break;
+
+    case 'refresh-favicons-folder': {
+      const folder = allNodes.find(n => n.id === activeFolderId);
+      if (folder) startFaviconBatch(folder, false);
+      break;
+    }
+
+    case 'refresh-thumbs-folder': {
+      const folder = allNodes.find(n => n.id === activeFolderId);
+      if (folder) startThumbBatch(folder);
+      break;
+    }
+
+    case 'open-portable': {
+      const t = getActiveLink();
+      if (!t?.url) break;
+      invoke('load_browsers_config')
+        .then(config => {
+          const browsers = (config?.browsers) || [];
+          if (browsers.length > 0) {
+            invoke('open_url_with', { url: t.url, browser: browsers[0].path }).catch(console.error);
+          } else {
+            handleMenuAction('open-with');
+          }
+        })
+        .catch(() => handleMenuAction('open-with'));
+      break;
+    }
   }
 }
 

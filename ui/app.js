@@ -926,7 +926,7 @@ function buildSortSubmenu(folderNode) {
 
 function buildFolderImportSubmenu(folderNode) {
   const sub = document.createElement("div");
-  sub.className = "ctx-sub-float";
+  sub.className = "ctx-submenu";
 
   const addItem = (icon, label, action) => {
     sub.appendChild(ctxItem(icon, label, null, () => {

@@ -1,72 +1,120 @@
 # URL Album 2
 
-Portable desktop bookmark manager. Modern rewrite of the classic Win32 URL Album application.
+**Portable менеджер закладок для Windows 10/11**
 
-Built with **Tauri 2** · **Rust** · **Vanilla JS** · **SQLite**
+Идейный наследник классического URL Album — простой и удобный менеджер закладок, который хранит всё локально, без облака и без слежки.
+
+![URL Album 2](https://github.com/skljar/url-album-2/releases/download/v2.0-beta/screen1.png)
 
 ---
 
-## Features
+## ⬇ Скачать
 
-- **Tree navigation** — folder hierarchy with accordion expand, inline rename, drag-free reorder
-- **Screenshot previews** — headless Edge/Chrome captures stored in `Data/` next to the exe
-- **Link checker** — concurrent HTTP checks with pause/resume, sortable/resizable results table
-- **Duplicate finder** — two-panel utility, delete selected or keep-one-per-group
-- **Import** — ua.dat (Windows-1251), Netscape HTML, TXT (URL per line), JSON sync, browser bookmarks (Chrome/Edge/Opera/Firefox via places.sqlite)
-- **Export** — Netscape HTML, plain TXT, JSON sync file
-- **Toolbar** — compact Win32-style, fully customizable via drag-and-drop dialog
-- **Settings** — theme, accordion tree, confirm-on-delete, duplicate guard, proxy, screenshot size
-- **Browser manager** — Open With list, portable browser support, auto-detect installed browsers
+**[URL-Album-2.0-beta.zip (3.7 MB)](https://github.com/skljar/url-album-2/releases/latest/download/URL-Album-2.0-beta.zip)**
 
-## Portable architecture
+Требования: **Windows 10 / 11** (64-bit)
 
-Everything lives next to `url-album.exe`:
+---
+
+## Возможности
+
+### База данных
+- Несколько баз данных — переключение на лету
+- История последних открытых баз (Файл → Последние базы)
+- Свойства базы — путь, размер файла, кол-во папок и ссылок
+- Резервная копия со скриншотами и без
+- **Portable** — все файлы рядом с exe, реестр не трогается
+
+### Навигация
+- Дерево папок в левой панели
+- Список ссылок в правой панели (Название / Адрес)
+- Drag & Drop — перетаскивание ссылок и папок
+- Resizable панели и колонки (сохраняются)
+
+### Ссылки
+- Создание, редактирование, удаление
+- Открыть в браузере по умолчанию (Enter / двойной клик)
+- Открыть с помощью — выбор конкретного браузера
+- Заметки к закладкам
+- Карточка ссылки с превью скриншота
+
+### Скриншоты сайтов
+- Обновить рисунок для одной ссылки
+- Пакетное обновление для всей папки (правый клик → Обновить рисунки)
+- Настройки: размер, таймаут
+- Требуется Edge или Chrome
+
+### Иконки сайтов (favicon)
+- Загрузка для одной ссылки или для всей папки рекурсивно
+- 4 стратегии поиска: favicon.ico → HTML → DuckDuckGo → Google
+- Кэш иконок рядом с базой данных
+
+### Импорт
+- Из браузера: **Chrome, Firefox, Edge, Opera, Brave**
+- Из файлов: HTML (Netscape bookmarks), TXT (одна ссылка на строку)
+- Из старого URL Album (ua.dat)
+- Из файла синхронизации (JSON)
+- Импорт в конкретную папку (правый клик → Импорт в папку)
+
+### Экспорт
+- В HTML файл
+- В TXT файл
+- В файл синхронизации (JSON)
+
+### Поиск и инструменты
+- Поиск по названию, URL, заметке (Ctrl+F)
+- Поиск дублирующихся ссылок
+- Проверка доступности ссылок
+
+---
+
+## Меню
+
+| Меню | Назначение |
+|------|-----------|
+| **Файл** | База данных: создать, открыть, последние, резервная копия, свойства |
+| **Ссылки** | Операции над закладками |
+| **Перенос** | Импорт и экспорт |
+| **Поиск** | Поиск по базе |
+| **Вид** | Дерево папок, настройка toolbar |
+
+---
+
+## Установка
+
+1. Скачайте ZIP-архив
+2. Распакуйте в любую папку
+3. Запустите `URL-Album.exe`
+
+При первом запуске: **Файл → Создать базу** или **Файл → Открыть базу**
+
+### Файлы создаются автоматически рядом с exe
 
 ```
-url-album.exe
-album.db          ← SQLite database (created on first run)
-album.db-shm
-album.db-wal
-Data/             ← screenshot PNGs
-browsers.json     ← browser list
-toolbar.json      ← toolbar layout
-settings.json     ← app settings
+URL-Album.exe
+album.db          ← база закладок
+settings.json     ← настройки
+toolbar.json      ← настройки тулбара
+browsers.json     ← список браузеров
+recent_dbs.txt    ← история баз
+Data\             ← скриншоты сайтов
+Data\favicons\    ← кэш иконок
 ```
 
-Move the folder anywhere — the app just works.
+---
 
-## Building
+## Статус: Beta
 
-Requires: [Rust](https://rustup.rs) · [Node.js](https://nodejs.org) · [Tauri CLI v2](https://tauri.app)
+Программа в активной разработке. Баги и пожелания — в [Issues](https://github.com/skljar/url-album-2/issues).
 
-```bash
-# Development
-cargo tauri dev
+### Пока не реализовано
+- Восстановление из резервной копии
+- Скриншоты без Edge/Chrome
+- Proxy настройки
+- Windows 7/8
 
-# Release build
-cd src-tauri
-cargo build --release
-# → src-tauri/target/release/url-album.exe
-```
+---
 
-## Stack
+## Технологии
 
-| Layer | Technology |
-|-------|-----------|
-| Shell | Tauri 2 (WebView2) |
-| Backend | Rust — rusqlite (bundled SQLite), rfd 0.15, reqwest 0.12 |
-| Frontend | Vanilla JS, no framework |
-| Dialogs | rfd AsyncFileDialog with parent window (no dialogs behind main window) |
-
-## Keyboard shortcuts
-
-| Key | Action |
-|-----|--------|
-| `Ctrl+F` | Search |
-| `Ctrl+N` | New folder (root level) |
-| `Ctrl+Shift+N` | New link |
-| `F2` | Rename selected folder |
-| `F4` | Properties |
-| `Del` | Delete |
-| `Enter` | Open link in browser |
-| `Esc` | Close dialog / clear search |
+[Tauri 2](https://tauri.app) + Rust + SQLite + Vanilla JS

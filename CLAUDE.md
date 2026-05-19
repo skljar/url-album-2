@@ -358,7 +358,7 @@ CREATE TABLE nodes (
 12. **Grid single click** → `openDetailView` (карточка); double click → открыть в браузере
 13. **`open_url`** → `rundll32.exe url.dll,FileProtocolHandler`; новая `open_file` для локальных файлов
 14. **Контекстные меню** — убран "Проверить" из меню ссылки; упорядочены пункты; сортировка: один пункт + toggle asc/desc с ▲▼
-15. **`refresh_thumb`** — принимает width/height/timeout из настроек; дефолт 1280×800, 30сек; кнопка "По умолчанию"
+15. **`refresh_thumb`** — принимает width/height/timeout из настроек; дефолт 1280×800, **15сек**; кнопка "По умолчанию"
 16. **Окно** — `center: true`, `minWidth: 500` (Windows Snap корректно)
 17. **Очистка** — удалены test screenshots, дубликаты иконок
 
@@ -416,3 +416,11 @@ CREATE TABLE nodes (
 26. **Динамическое подменю "Последние базы"** — `_populateRecentDbs(drop)` вызывается при каждом открытии File меню
     - Элементы: `entry.dataset.recentDbs = '1'` для lookup
     - Click на запись: `invoke('switch_db', { newPath: p }).then(() => showApp())`
+
+### Сессия 6 (2026-05-19) — Багфиксы
+27. **Fix: favicon не появлялись после batch-загрузки** — `_finishFaviconBatch` теперь вызывает `renderTree()` + `loadFolderContents(activeFolderId)` после завершения. Ранее `updateFaviconInDOM` обновлял DOM, но WebView2 не перерисовывал без явного reload.
+28. **Fix: скриншоты зависали на недоступных сайтах** — `spawn()` + poll `try_wait()` каждые 250мс вместо `status()`. Если deadline превышен — `child.kill()` принудительно, браузер всегда завершается в срок.
+    - Дефолтный таймаут: 30с → **15с** (Настройки → Рисунок)
+    - Rust fallback: `timeout.unwrap_or(15)`
+    - JS fallbacks: `appSettings.thumbTimeout || 15`
+29. **Release build** — `cargo build --release` → `dist/URL-Album-2.0-beta.zip` (3.7 MB). Полностью portable, в реестр ничего не пишется (только `reg query` для определения браузеров — read-only).

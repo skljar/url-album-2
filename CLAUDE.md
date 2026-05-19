@@ -390,3 +390,29 @@ CREATE TABLE nodes (
     - `expand-all` / `collapse-all` полностью удалены (из CMD_REGISTRY, handlers, DEFAULT_TOOLBAR)
 20. **Меню закрывается** при `window.blur` (клик на titlebar, Alt+Tab)
 21. **`group.dataset.id = menu.id`** — добавлен в buildMenubar для идентификации групп меню
+
+### Сессия 5 (2026-05-19) — Реструктуризация меню
+22. **Новая архитектура меню** — принцип "НАД ЧЕМ":
+    - **Файл** = только lifecycle БД: Создать/Открыть/Последние базы▶/Закрыть/Резервная копия▶/Свойства базы/Настройки/Выход
+    - **Ссылки** = только операции над ссылками (без Import/Export/Backup/Sort)
+    - **Перенос** = новое меню: Импорт▶/Экспорт▶/Браузеры
+    - **Поиск** = только "Найти" (дубликаты перенесены в Ссылки)
+    - **Вид** — без изменений
+23. **Новые Rust команды:**
+    - `close_db` — checkpoint WAL, JS показывает welcome screen
+    - `get_recent_dbs()` — список последних баз из `recent_dbs.txt` (max 10)
+    - `get_db_properties()` → `DbProperties { path, size_bytes, folder_count, bookmark_count }`
+    - `save_recent_db(path)` — вызывается из `switch_db` автоматически
+    - Import команды (`import_html`, `import_txt_lines`, `import_sync`, `import_uadat_pick`, `import_txt_urls`, `db::import`) — добавлен `parent_id: Option<i64>` для импорта в конкретную папку
+24. **Диалог "Свойства базы"** — показывает путь, размер, кол-во папок/ссылок; кнопка "Очистить базу"
+    - `openDbPropertiesDialog()`, `formatBytes(bytes)`, `#dbprops-overlay`
+    - `.win-btn-danger` / `.win-btn.win-btn-danger:not(:disabled):hover` — красная кнопка опасного действия
+25. **Новое контекстное меню папки:**
+    - Новая папка (`createFolderAndRename(folderNode.id)`) / Переименовать / Удалить
+    - Импорт в папку▶ (`buildFolderImportSubmenu`) / Экспорт папки▶
+    - Проверить ссылки / Обновить favicon'ы / Обновить рисунки
+    - Сортировка▶ / Свойства
+    - `invokeFolderImport(action, parentId)` — передаёт parentId в import команды
+26. **Динамическое подменю "Последние базы"** — `_populateRecentDbs(drop)` вызывается при каждом открытии File меню
+    - Элементы: `entry.dataset.recentDbs = '1'` для lookup
+    - Click на запись: `invoke('switch_db', { newPath: p }).then(() => showApp())`

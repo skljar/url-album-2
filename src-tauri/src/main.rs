@@ -329,7 +329,7 @@ fn refresh_thumb(
         .find(|p| std::path::Path::new(p).exists())
         .ok_or("Edge или Chrome не найден")?;
 
-    let tmp_dir = std::env::temp_dir().join("ua_screenshot_profile");
+    let tmp_dir = std::env::temp_dir().join(format!("ua_screenshot_{id}"));
     let status = std::process::Command::new(browser)
         .args([
             "--headless=new",

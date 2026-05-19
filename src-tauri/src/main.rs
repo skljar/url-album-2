@@ -585,6 +585,21 @@ fn load_last_db() -> Option<std::path::PathBuf> {
     if p.exists() { Some(p) } else { None }
 }
 
+fn recent_dbs_file() -> Option<std::path::PathBuf> {
+    Some(std::env::current_exe().ok()?.parent()?.join("recent_dbs.txt"))
+}
+
+fn save_recent_db(path: &std::path::Path) {
+    let Some(f) = recent_dbs_file() else { return };
+    let path_str = path.to_string_lossy().into_owned();
+    let existing = std::fs::read_to_string(&f).unwrap_or_default();
+    let entries: Vec<String> = std::iter::once(path_str.clone())
+        .chain(existing.lines().filter(|l| !l.trim().is_empty() && *l != path_str).map(String::from))
+        .take(10)
+        .collect();
+    std::fs::write(f, entries.join("\n")).ok();
+}
+
 /// Internal: checkpoint current connection, open a new one at `new_path`, update AppState.
 fn switch_db(state: tauri::State<'_, AppState>, new_path: std::path::PathBuf) -> Result<(), String> {
     let mut db_guard = state.db.lock().map_err(|e| e.to_string())?;
@@ -599,6 +614,7 @@ fn switch_db(state: tauri::State<'_, AppState>, new_path: std::path::PathBuf) ->
     let mut path_guard = state.db_path.lock().map_err(|e| e.to_string())?;
     *path_guard = new_path.clone();
     save_last_db(&new_path);
+    save_recent_db(&new_path);
     Ok(())
 }
 
@@ -1101,6 +1117,54 @@ fn set_window_title(window: tauri::Window, title: String) {
 fn checkpoint_db(state: tauri::State<AppState>) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     conn.execute_batch("PRAGMA wal_checkpoint(FULL)").map_err(|e| e.to_string())
+}
+
+/// Checkpoint WAL with TRUNCATE (JS handles UI transition to welcome screen).
+#[tauri::command]
+fn close_db(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)").ok();
+    Ok(())
+}
+
+/// Return list of recently opened DB paths (filtered to existing files, max 10).
+#[tauri::command]
+fn get_recent_dbs() -> Vec<String> {
+    let Some(f) = recent_dbs_file() else { return Vec::new() };
+    std::fs::read_to_string(f)
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.trim().is_empty() && std::path::Path::new(l).exists())
+        .map(String::from)
+        .collect()
+}
+
+#[derive(serde::Serialize)]
+struct DbProperties {
+    path: String,
+    size_bytes: u64,
+    folder_count: i64,
+    bookmark_count: i64,
+}
+
+/// Return structured DB info: path, size, folder/bookmark counts.
+#[tauri::command]
+fn get_db_properties(state: tauri::State<'_, AppState>) -> Result<DbProperties, String> {
+    let path = state.db_path.lock().map_err(|e| e.to_string())?.clone();
+    let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let folder_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM nodes WHERE kind='folder'", [], |r| r.get(0)
+    ).unwrap_or(0);
+    let bookmark_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM nodes WHERE kind='bookmark'", [], |r| r.get(0)
+    ).unwrap_or(0);
+    Ok(DbProperties {
+        path: path.to_string_lossy().into_owned(),
+        size_bytes,
+        folder_count,
+        bookmark_count,
+    })
 }
 
 // ── Browser detection ────────────────────────────────────────────────────────
@@ -1680,6 +1744,9 @@ fn main() {
             get_data_dir,
             fetch_favicon,
             update_node_favicon,
+            close_db,
+            get_recent_dbs,
+            get_db_properties,
         ])
         .on_window_event(|_window, event| {
             // Checkpoint WAL into main file on every window close so data

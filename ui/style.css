@@ -1521,3 +1521,8 @@ body {
   transition: width 0.25s;
 }
 #tp-btn-row { display: flex; justify-content: flex-end; }
+
+/* ── DB Properties dialog ──────────────────────────────────────────────────── */
+.dbprops-footer { justify-content: space-between; }
+.win-btn-danger { color: #c00; }
+.win-btn-danger:not(:disabled):hover { background: #c00; color: #fff; border-color: #c00; }

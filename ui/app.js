@@ -1321,6 +1321,42 @@ fpropsOverlay.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeFolderPropsDialog();
 });
 
+// ── DB Properties dialog ──────────────────────────────────────────────────
+const dbpropsOverlay = document.getElementById('dbprops-overlay');
+
+function openDbPropertiesDialog() {
+  invoke('get_db_properties')
+    .then(props => {
+      document.getElementById('dbp-path').textContent      = props.path;
+      document.getElementById('dbp-size').textContent      = formatBytes(props.size_bytes);
+      document.getElementById('dbp-folders').textContent   = props.folder_count;
+      document.getElementById('dbp-bookmarks').textContent = props.bookmark_count;
+      const dlg = document.getElementById('dbprops-dlg');
+      dlg.style.position = ''; dlg.style.left = ''; dlg.style.top = ''; dlg.style.margin = '';
+      raiseOverlay(dbpropsOverlay);
+      dbpropsOverlay.classList.remove('hidden');
+    })
+    .catch(console.error);
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+}
+
+document.getElementById('dbprops-x').onclick    = () => dbpropsOverlay.classList.add('hidden');
+document.getElementById('dbp-ok-btn').onclick   = () => dbpropsOverlay.classList.add('hidden');
+document.getElementById('dbp-clear-btn').onclick = () => {
+  dbpropsOverlay.classList.add('hidden');
+  handleMenuAction('clear-db');
+};
+
+makeDlgDraggable(
+  document.getElementById('dbprops-dlg'),
+  document.querySelector('#dbprops-dlg .props-drag-handle')
+);
+
 // ── Active link helper ────────────────────────────────────────────────────
 function getActiveLink() {
   return activeBookmarkNode

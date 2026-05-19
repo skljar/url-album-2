@@ -179,6 +179,31 @@
     </div>
   </div>
 
+  <!-- DB Properties dialog -->
+  <div id="dbprops-overlay" class="dlg-overlay hidden">
+    <div class="win-dlg props-dlg" id="dbprops-dlg">
+      <div class="dlg-title props-drag-handle">
+        <span>Свойства базы данных</span>
+        <button class="dlg-close" id="dbprops-x">×</button>
+      </div>
+      <div class="dlg-body dlg-form">
+        <div class="form-row"><label class="form-label">Путь</label>
+          <span class="props-ro props-path" id="dbp-path"></span></div>
+        <div class="form-row"><label class="form-label">Размер</label>
+          <span class="props-ro" id="dbp-size"></span></div>
+        <div class="props-sep"></div>
+        <div class="form-row"><label class="form-label">Папок</label>
+          <span class="props-ro" id="dbp-folders"></span></div>
+        <div class="form-row"><label class="form-label">Ссылок</label>
+          <span class="props-ro" id="dbp-bookmarks"></span></div>
+      </div>
+      <div class="dlg-footer dbprops-footer">
+        <button class="win-btn win-btn-danger" id="dbp-clear-btn">Очистить базу</button>
+        <button class="win-btn win-btn-default" id="dbp-ok-btn">OK</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Link checker utility panel (non-modal) -->
   <div id="checker-panel" class="hidden">
     <div id="chk-titlebar">

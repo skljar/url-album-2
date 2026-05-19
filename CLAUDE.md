@@ -417,6 +417,11 @@ CREATE TABLE nodes (
     - Элементы: `entry.dataset.recentDbs = '1'` для lookup
     - Click на запись: `invoke('switch_db', { newPath: p }).then(() => showApp())`
 
+### Сессия 7 (2026-05-19) — Drag & Drop fix
+30. **Fix: drag & drop не работал вообще** — Tauri по умолчанию перехватывает все OS-level drag-события для своего механизма drop файлов в окно (`dragDropEnabled: true`). Это блокировало `dragstart` на всех элементах. Фикс: `"dragDropEnabled": false` в `tauri.conf.json`.
+31. **Refactor: DnD переписан на event delegation** — вместо handlers на каждом элементе, один `dragover`/`drop` на `treeEl` и `gridEl`. Используется `e.target.closest('.tree-item:not(.link)')` и `.closest('.card-folder')` для определения цели.
+32. **Fix: убрана лишняя проверка "already there"** из `_isDragValid` — теперь перемещение в ту же папку просто делает no-op, но не блокирует drag visually.
+
 ### Сессия 6 (2026-05-19) — Багфиксы
 27. **Fix: favicon не появлялись после batch-загрузки** — `_finishFaviconBatch` теперь вызывает `renderTree()` + `loadFolderContents(activeFolderId)` после завершения. Ранее `updateFaviconInDOM` обновлял DOM, но WebView2 не перерисовывал без явного reload.
 28. **Fix: скриншоты зависали на недоступных сайтах** — `spawn()` + poll `try_wait()` каждые 250мс вместо `status()`. Если deadline превышен — `child.kill()` принудительно, браузер всегда завершается в срок.

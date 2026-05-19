@@ -293,7 +293,8 @@ CREATE TABLE nodes (
 - `CREATE_NO_WINDOW (0x0800_0000)` на все `Command::new` для консольных exe
 - `normalize_url()` — вызывается в open_url, open_url_with, refresh_thumb, fetch_favicon, check_url
 - `open_url` использует `rundll32.exe url.dll,FileProtocolHandler` (не `cmd /c start` — ненадёжно)
-- Async команды (fetch_favicon, check_url): НЕ держать MutexGuard через `.await`
+- Async команды (fetch_favicon, check_url, refresh_thumb): НЕ держать MutexGuard через `.await`
+- Команды с блокирующими процессами (`std::process::Command::status()`) — обязательно `async fn` + `tauri::async_runtime::spawn_blocking`, иначе IPC-поток замерзает и UI не реагирует
 - `favicon` в DB: только filename (`github.com.png`), путь = `exe_dir/Data/favicons/{filename}`
 
 ### JS
@@ -316,6 +317,7 @@ CREATE TABLE nodes (
 - Grid layout для list rows: `grid-template-columns: 18px var(--col-name-w) 5px 1fr`
 - `.favicon-icon` — 16×16, `image-rendering: pixelated`, `object-fit: contain`
 - `#favicon-panel` — `position: fixed; bottom: 24px; left: 24px` (non-modal)
+- `#thumb-panel` — аналогично, z-index: 501, перетаскивается за `#tp-titlebar`; `makeDlgDraggable` сбрасывает `bottom/right → auto` при drag
 - `.tree-item .arrow[data-has-children]::before` — `+` / `.tree-item.open > .arrow[data-has-children]::before` — `−`
 - `.tree-item:hover > .label` / `.tree-item.active > .label` — серый фон только на тексте
 - `.fsvg-closed` / `.fsvg-open` + `.tree-item.open` — CSS переключение иконок папок
@@ -358,6 +360,17 @@ CREATE TABLE nodes (
 15. **`refresh_thumb`** — принимает width/height/timeout из настроек; дефолт 1280×800, 30сек; кнопка "По умолчанию"
 16. **Окно** — `center: true`, `minWidth: 500` (Windows Snap корректно)
 17. **Очистка** — удалены test screenshots, дубликаты иконок
+
+### Сессия 4 (2026-05-19)
+22. **Batch thumbnail refresh** — пакетное обновление скриншотов для папки:
+    - Пункт "Обновить рисунки" в контекстном меню папки (после "Загрузить favicon'ы")
+    - `#thumb-panel` — новая прогресс-панель (HTML + CSS), зеркало `#favicon-panel`, z-index: 501
+    - `startThumbBatch(folderNode)` — только прямые ссылки папки (не рекурсивно)
+    - `_runThumbWorker()` — `MAX_THUMB_CONCURRENCY = 1`, обновляет `allNodes` + DOM грида
+    - `makeDlgDraggable` на `#tp-titlebar` — панель перетаскивается
+    - **Fix:** `refresh_thumb` переведён из `fn` в `async fn` + `tauri::async_runtime::spawn_blocking` — `std::process::Command::status()` больше не блокирует IPC-поток и UI
+    - **Fix:** уникальный `--user-data-dir` per invocation (`ua_screenshot_{id}`) — устранён конфликт при параллельных вызовах
+    - **Fix:** `makeDlgDraggable` сбрасывает `bottom`/`right` → `auto` при начале drag — панели с `bottom:` позиционированием не растягиваются
 
 ### Сессия 3 (2026-05-17–18)
 18. **Tree UX — доработки:**

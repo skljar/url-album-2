@@ -318,6 +318,7 @@ CREATE TABLE nodes (
 - `.favicon-icon` — 16×16, `image-rendering: pixelated`, `object-fit: contain`
 - `#favicon-panel` — `position: fixed; bottom: 24px; left: 24px` (non-modal)
 - `#thumb-panel` — аналогично, z-index: 501, перетаскивается за `#tp-titlebar`; `makeDlgDraggable` сбрасывает `bottom/right → auto` при drag
+- `_applyThumbToCard(id, title, newPath)` — обновляет `allNodes` + grid card DOM; используй его при любых изменениях thumbnail
 - `.tree-item .arrow[data-has-children]::before` — `+` / `.tree-item.open > .arrow[data-has-children]::before` — `−`
 - `.tree-item:hover > .label` / `.tree-item.active > .label` — серый фон только на тексте
 - `.fsvg-closed` / `.fsvg-open` + `.tree-item.open` — CSS переключение иконок папок
@@ -367,10 +368,13 @@ CREATE TABLE nodes (
     - `#thumb-panel` — новая прогресс-панель (HTML + CSS), зеркало `#favicon-panel`, z-index: 501
     - `startThumbBatch(folderNode)` — только прямые ссылки папки (не рекурсивно)
     - `_runThumbWorker()` — `MAX_THUMB_CONCURRENCY = 1`, обновляет `allNodes` + DOM грида
+    - `_applyThumbToCard(id, title, newPath)` — хелпер обновления карточки в гриде; используется и в `_runThumbWorker`, и в `refreshThumb`
     - `makeDlgDraggable` на `#tp-titlebar` — панель перетаскивается
     - **Fix:** `refresh_thumb` переведён из `fn` в `async fn` + `tauri::async_runtime::spawn_blocking` — `std::process::Command::status()` больше не блокирует IPC-поток и UI
-    - **Fix:** уникальный `--user-data-dir` per invocation (`ua_screenshot_{id}`) — устранён конфликт при параллельных вызовах
+    - **Fix:** уникальный `--user-data-dir` per invocation (`ua_screenshot_{id}`) — устранён конфликт при параллельных вызовах; temp dir удаляется после каждого скриншота
     - **Fix:** `makeDlgDraggable` сбрасывает `bottom`/`right` → `auto` при начале drag — панели с `bottom:` позиционированием не растягиваются
+    - **Fix:** `#import-screen` скрыт по умолчанию — устранено мигание стартового экрана при Ctrl+R
+    - **Cleanup:** `CREATE_NO_WINDOW` добавлен к browser Command в `spawn_blocking` (консистентно с остальным кодом)
 
 ### Сессия 3 (2026-05-17–18)
 18. **Tree UX — доработки:**

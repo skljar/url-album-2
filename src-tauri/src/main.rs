@@ -317,7 +317,7 @@ async fn refresh_thumb(
 
     let w = width.unwrap_or(1280);
     let h = height.unwrap_or(800);
-    let t = timeout.unwrap_or(30);
+    let t = timeout.unwrap_or(15);
 
     // Try Edge, then Chrome (headless --screenshot mode)
     let candidates = [
@@ -352,7 +352,21 @@ async fn refresh_thumb(
         ]);
         #[cfg(windows)]
         cmd.creation_flags(0x0800_0000);
-        cmd.status().map_err(|e| e.to_string())
+        let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(t as u64);
+        loop {
+            match child.try_wait().map_err(|e| e.to_string())? {
+                Some(s) => return Ok(s),
+                None => {
+                    if std::time::Instant::now() >= deadline {
+                        child.kill().ok();
+                        child.wait().ok();
+                        return Err("timeout".to_string());
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+            }
+        }
     }).await.map_err(|e| e.to_string())??;
 
     let _ = std::fs::remove_dir_all(&tmp_dir);

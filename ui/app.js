@@ -1079,7 +1079,7 @@ async function refreshThumb(node) {
       url: node.url,
       width:   appSettings.thumbWidth   || 1280,
       height:  appSettings.thumbHeight  || 800,
-      timeout: appSettings.thumbTimeout || 30,
+      timeout: appSettings.thumbTimeout || 15,
     });
 
     if (activeBookmarkNode?.id === node.id) activeBookmarkNode.thumb = newPath;
@@ -3138,7 +3138,7 @@ let appSettings = {
   // Рисунок
   thumbWidth:    1280,
   thumbHeight:   800,
-  thumbTimeout:  30,
+  thumbTimeout:  15,
 };
 
 async function loadAppSettings() {
@@ -3301,7 +3301,7 @@ function applyColWidth(pct, persist = true) {
     document.getElementById('s-thumb-defaults').onclick = () => {
       document.getElementById('s-thumb-w').value       = 1280;
       document.getElementById('s-thumb-h').value       = 800;
-      document.getElementById('s-thumb-timeout').value = 30;
+      document.getElementById('s-thumb-timeout').value = 15;
     };
 
     raiseOverlay(overlay);
@@ -4483,7 +4483,7 @@ function _runThumbWorker() {
     url:     item.url,
     width:   appSettings.thumbWidth   || 1280,
     height:  appSettings.thumbHeight  || 800,
-    timeout: appSettings.thumbTimeout || 30,
+    timeout: appSettings.thumbTimeout || 15,
   })
     .then(newPath => {
       if (!newPath) return;

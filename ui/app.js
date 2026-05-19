@@ -957,6 +957,10 @@ function showFolderContextMenu(e, folderNode) {
     hideContextMenu();
     startFaviconBatch(folderNode, true);
   }));
+  ctxMenuEl.appendChild(ctxItem("refresh", "Обновить рисунки", null, () => {
+    hideContextMenu();
+    startThumbBatch(folderNode);
+  }));
   ctxMenuEl.appendChild(ctxItem("edit", "Переименовать", "F2", () => {
     hideContextMenu();
     startInlineRename(folderNode.id);
@@ -4369,6 +4373,7 @@ function startThumbBatch(folderNode) {
   _thumbCancelled = false;
   _thumbQueue     = [];
   _thumbActive    = 0;
+  _thumbDone      = 0;
 
   const bookmarks = allNodes.filter(
     n => n.parent === folderNode.id && n.kind === 'bookmark' && n.url

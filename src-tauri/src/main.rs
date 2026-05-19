@@ -295,8 +295,8 @@ async fn fetch_favicon(
 }
 
 #[tauri::command]
-fn refresh_thumb(
-    state: tauri::State<AppState>,
+async fn refresh_thumb(
+    state: tauri::State<'_, AppState>,
     id: i64,
     url: String,
     width: Option<u32>,
@@ -327,23 +327,31 @@ fn refresh_thumb(
     ];
     let browser = candidates.iter()
         .find(|p| std::path::Path::new(p).exists())
-        .ok_or("Edge или Chrome не найден")?;
+        .ok_or("Edge или Chrome не найден")?
+        .to_string();
 
     let tmp_dir = std::env::temp_dir().join(format!("ua_screenshot_{id}"));
-    let status = std::process::Command::new(browser)
-        .args([
-            "--headless=new",
-            "--disable-gpu",
-            "--no-sandbox",
-            "--hide-scrollbars",
-            &format!("--window-size={w},{h}"),
-            &format!("--timeout={}", t * 1000),
-            &format!("--user-data-dir={}", tmp_dir.display()),
-            &format!("--screenshot={path_str}"),
-            &url,
-        ])
-        .status()
-        .map_err(|e| e.to_string())?;
+    let tmp_dir_str = tmp_dir.to_string_lossy().into_owned();
+    let path_str2 = path_str.clone();
+    let url2 = url.clone();
+
+    // Run blocking browser process on a dedicated thread so the UI stays responsive
+    let status = tauri::async_runtime::spawn_blocking(move || {
+        std::process::Command::new(&browser)
+            .args([
+                "--headless=new",
+                "--disable-gpu",
+                "--no-sandbox",
+                "--hide-scrollbars",
+                &format!("--window-size={w},{h}"),
+                &format!("--timeout={}", t * 1000),
+                &format!("--user-data-dir={tmp_dir_str}"),
+                &format!("--screenshot={path_str2}"),
+                &url2,
+            ])
+            .status()
+            .map_err(|e| e.to_string())
+    }).await.map_err(|e| e.to_string())??;
 
     if !status.success() || !path.exists() {
         return Err("Не удалось создать скриншот".to_string());

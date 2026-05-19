@@ -924,6 +924,59 @@ function buildSortSubmenu(folderNode) {
   return sub;
 }
 
+function buildFolderImportSubmenu(folderNode) {
+  const sub = document.createElement("div");
+  sub.className = "ctx-sub-float";
+
+  const addItem = (icon, label, action) => {
+    sub.appendChild(ctxItem(icon, label, null, () => {
+      hideContextMenu();
+      invokeFolderImport(action, folderNode.id);
+    }));
+  };
+
+  addItem("browser", "Из браузера...",     "import-from-browser");
+  sub.appendChild(ctxSep());
+  addItem("import",  "Из файла HTML",      "import-html");
+  addItem("import",  "Из файла TXT",       "import-txt-lines");
+  sub.appendChild(ctxSep());
+  addItem("backup",  "Файл синхронизации", "import-sync");
+  addItem("folder",  "Из ua.dat...",       "import-folder");
+
+  return sub;
+}
+
+async function invokeFolderImport(action, parentId) {
+  try {
+    let count = 0;
+    switch (action) {
+      case 'import-from-browser':
+        openBrowserImportDialog();
+        return;
+      case 'import-html':
+        count = await invoke('import_html', { parentId });
+        break;
+      case 'import-txt-lines':
+        count = await invoke('import_txt_lines', { parentId });
+        break;
+      case 'import-sync':
+        count = await invoke('import_sync', { parentId });
+        break;
+      case 'import-folder':
+        count = await invoke('import_uadat_pick', { parentId });
+        break;
+    }
+    if (count > 0) {
+      allNodes = await invoke('get_tree');
+      allFolders = allNodes.filter(n => n.kind === 'folder');
+      renderTree();
+      selectFolder(parentId);
+    }
+  } catch(e) {
+    if (e !== 'Отменено') console.error('invokeFolderImport:', e);
+  }
+}
+
 function addSubTrigger(label, icon) {
   const el = ctxItem(icon, label, null, null, false);
   el.classList.add("ctx-has-sub");
@@ -940,21 +993,37 @@ function showFolderContextMenu(e, folderNode) {
   closeSubFloat();
   ctxMenuEl.innerHTML = "";
 
-  const expEl  = addSubTrigger("Экспорт",    "import");
-  const sortEl = addSubTrigger("Сортировка", "sort");
+  // ── Folder management ──────────────────────────────────────────────────
+  ctxMenuEl.appendChild(ctxItem("new", "Новая папка", null, () => {
+    hideContextMenu();
+    createFolderAndRename(folderNode.id);
+  }));
+  ctxMenuEl.appendChild(ctxItem("edit", "Переименовать", "F2", () => {
+    hideContextMenu();
+    startInlineRename(folderNode.id);
+  }));
+  ctxMenuEl.appendChild(ctxItem("trash", "Удалить", "Del", () => {
+    hideContextMenu();
+    deleteFolder(folderNode);
+  }));
+  ctxMenuEl.appendChild(ctxSep());
 
-  wireMainContextFloat(expEl,  () => buildExportSubmenu(folderNode));
-  wireMainContextFloat(sortEl, () => buildSortSubmenu(folderNode));
+  // ── Transfer ───────────────────────────────────────────────────────────
+  const impEl = addSubTrigger("Импорт в папку", "import");
+  wireMainContextFloat(impEl, () => buildFolderImportSubmenu(folderNode));
+  ctxMenuEl.appendChild(impEl);
 
+  const expEl = addSubTrigger("Экспорт папки", "backup");
+  wireMainContextFloat(expEl, () => buildExportSubmenu(folderNode));
   ctxMenuEl.appendChild(expEl);
   ctxMenuEl.appendChild(ctxSep());
-  ctxMenuEl.appendChild(sortEl);
-  ctxMenuEl.appendChild(ctxSep());
-  ctxMenuEl.appendChild(ctxItem("verify", "Проверить", null, () => {
+
+  // ── Operations ─────────────────────────────────────────────────────────
+  ctxMenuEl.appendChild(ctxItem("verify", "Проверить ссылки", null, () => {
     hideContextMenu();
     openCheckerPanel(folderNode);
   }));
-  ctxMenuEl.appendChild(ctxItem("favicon", "Загрузить favicon'ы", null, () => {
+  ctxMenuEl.appendChild(ctxItem("favicon", "Обновить favicon'ы", null, () => {
     hideContextMenu();
     startFaviconBatch(folderNode, true);
   }));
@@ -962,22 +1031,20 @@ function showFolderContextMenu(e, folderNode) {
     hideContextMenu();
     startThumbBatch(folderNode);
   }));
-  ctxMenuEl.appendChild(ctxItem("edit", "Переименовать", "F2", () => {
-    hideContextMenu();
-    startInlineRename(folderNode.id);
-  }));
   ctxMenuEl.appendChild(ctxSep());
-  ctxMenuEl.appendChild(ctxItem("trash", "Удалить", "Del", () => {
-    hideContextMenu();
-    deleteFolder(folderNode);
-  }));
+
+  // ── Sort ───────────────────────────────────────────────────────────────
+  const sortEl = addSubTrigger("Сортировка", "sort");
+  wireMainContextFloat(sortEl, () => buildSortSubmenu(folderNode));
+  ctxMenuEl.appendChild(sortEl);
   ctxMenuEl.appendChild(ctxSep());
+
+  // ── Properties ─────────────────────────────────────────────────────────
   ctxMenuEl.appendChild(ctxItem("props", "Свойства", "F4", () => {
     hideContextMenu();
     openFolderPropsDialog(folderNode);
   }));
 
-  // Close float when hovering items without sub
   ctxMenuEl.querySelectorAll(".ctx-item:not(.ctx-has-sub)").forEach(it => {
     it.addEventListener("mouseenter", () => { clearTimeout(_subTimer); closeSubFloat(); });
   });

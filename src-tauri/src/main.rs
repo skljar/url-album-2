@@ -65,7 +65,7 @@ fn import_uadat(state: tauri::State<AppState>, path: String) -> Result<usize, St
 
     let nodes = importer::parse(&text);
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    db::import(&conn, &nodes, &data_dir).map_err(|e| e.to_string())
+    db::import(&conn, &nodes, &data_dir, None).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1574,7 +1574,7 @@ fn import_from_browser(state: tauri::State<AppState>, browser_id: String) -> Res
 }
 
 #[tauri::command]
-async fn import_txt_lines(state: tauri::State<'_, AppState>, window: tauri::Window) -> Result<usize, String> {
+async fn import_txt_lines(state: tauri::State<'_, AppState>, window: tauri::Window, parent_id: Option<i64>) -> Result<usize, String> {
     let file = rfd::AsyncFileDialog::new()
         .set_parent(&window)
         .set_title("Импорт URL из TXT (одна строка = одна ссылка)")
@@ -1585,13 +1585,13 @@ async fn import_txt_lines(state: tauri::State<'_, AppState>, window: tauri::Wind
         .unwrap_or_else(|| "Импорт".to_string());
     let content = std::fs::read_to_string(file.path()).map_err(|e| e.to_string())?;
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    db::import_txt_urls(&conn, &content, &folder_name).map_err(|e| e.to_string())
+    db::import_txt_urls(&conn, &content, &folder_name, parent_id).map_err(|e| e.to_string())
 }
 
 // ── Import commands ──────────────────────────────────────────────────────────
 
 #[tauri::command]
-async fn import_html(state: tauri::State<'_, AppState>, window: tauri::Window) -> Result<usize, String> {
+async fn import_html(state: tauri::State<'_, AppState>, window: tauri::Window, parent_id: Option<i64>) -> Result<usize, String> {
     let file = rfd::AsyncFileDialog::new()
         .set_parent(&window)
         .set_title("Импорт закладок из HTML")
@@ -1599,11 +1599,11 @@ async fn import_html(state: tauri::State<'_, AppState>, window: tauri::Window) -
         .pick_file().await.ok_or("Отменено")?;
     let content = std::fs::read_to_string(file.path()).map_err(|e| e.to_string())?;
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    db::import_html(&conn, &content, None).map_err(|e| e.to_string())
+    db::import_html(&conn, &content, parent_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn import_txt(state: tauri::State<'_, AppState>, window: tauri::Window) -> Result<usize, String> {
+async fn import_txt(state: tauri::State<'_, AppState>, window: tauri::Window, parent_id: Option<i64>) -> Result<usize, String> {
     let file = rfd::AsyncFileDialog::new()
         .set_parent(&window)
         .set_title("Импорт закладок из TXT")
@@ -1611,11 +1611,11 @@ async fn import_txt(state: tauri::State<'_, AppState>, window: tauri::Window) ->
         .pick_file().await.ok_or("Отменено")?;
     let content = std::fs::read_to_string(file.path()).map_err(|e| e.to_string())?;
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    db::import_txt(&conn, &content, None).map_err(|e| e.to_string())
+    db::import_txt(&conn, &content, parent_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn import_sync(state: tauri::State<'_, AppState>, window: tauri::Window) -> Result<usize, String> {
+async fn import_sync(state: tauri::State<'_, AppState>, window: tauri::Window, parent_id: Option<i64>) -> Result<usize, String> {
     let file = rfd::AsyncFileDialog::new()
         .set_parent(&window)
         .set_title("Импорт файла синхронизации")
@@ -1633,11 +1633,11 @@ async fn import_sync(state: tauri::State<'_, AppState>, window: tauri::Window) -
         note:       n["note"].as_str().map(String::from),
     }).collect();
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    db::import_sync_nodes(&conn, &nodes, None).map_err(|e| e.to_string())
+    db::import_sync_nodes(&conn, &nodes, parent_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn import_uadat_pick(state: tauri::State<'_, AppState>, window: tauri::Window) -> Result<usize, String> {
+async fn import_uadat_pick(state: tauri::State<'_, AppState>, window: tauri::Window, parent_id: Option<i64>) -> Result<usize, String> {
     let file = rfd::AsyncFileDialog::new()
         .set_parent(&window)
         .set_title("Открыть файл данных UA")
@@ -1651,7 +1651,7 @@ async fn import_uadat_pick(state: tauri::State<'_, AppState>, window: tauri::Win
         .unwrap_or_default();
     let nodes = importer::parse(&text);
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    db::import(&conn, &nodes, &data_dir).map_err(|e| e.to_string())
+    db::import(&conn, &nodes, &data_dir, parent_id).map_err(|e| e.to_string())
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────

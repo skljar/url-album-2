@@ -288,11 +288,11 @@ pub fn export_sync(conn: &Connection, folder_id: i64, with_images: bool) -> Resu
 
 /// Insert all parsed nodes into the database.
 /// `data_dir` is the absolute path to the folder containing PNG thumbnails.
-pub fn import(conn: &Connection, nodes: &[ParsedNode], data_dir: &str) -> Result<usize> {
+pub fn import(conn: &Connection, nodes: &[ParsedNode], data_dir: &str, dest_parent: Option<i64>) -> Result<usize> {
     conn.execute_batch("BEGIN")?;
 
-    // Stack of (depth, parent_id). Sentinel: depth=-1, id=0 (no parent).
-    let mut stack: Vec<(i64, Option<i64>)> = vec![(-1, None)];
+    // Stack of (depth, parent_id). Sentinel: depth=-1, dest_parent (None = root).
+    let mut stack: Vec<(i64, Option<i64>)> = vec![(-1, dest_parent)];
     let mut count = 0usize;
 
     for (sort_idx, node) in nodes.iter().enumerate() {
@@ -651,9 +651,9 @@ pub fn import_firefox(conn: &Connection, places_path: &str, browser_name: &str) 
     Ok((links, folders))
 }
 
-pub fn import_txt_urls(conn: &Connection, text: &str, folder_name: &str) -> Result<usize> {
+pub fn import_txt_urls(conn: &Connection, text: &str, folder_name: &str, dest_parent: Option<i64>) -> Result<usize> {
     conn.execute_batch("BEGIN")?;
-    conn.execute("INSERT INTO nodes (parent, kind, title, sort_idx) VALUES (NULL,'folder',?1,0)", params![folder_name])?;
+    conn.execute("INSERT INTO nodes (parent, kind, title, sort_idx) VALUES (?1,'folder',?2,0)", params![dest_parent, folder_name])?;
     let folder_id = conn.last_insert_rowid();
     let mut count = 0usize;
     for (i, line) in text.lines().enumerate() {

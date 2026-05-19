@@ -466,7 +466,6 @@ document.getElementById('tp-close-btn').addEventListener('click', () => {
 
 makeDlgDraggable(document.getElementById('thumb-panel'), document.getElementById('tp-titlebar'));
 
-// ── Duplicate finder ─────────────────────────────────────────────────────
 // ── Duplicates finder (full utility) ─────────────────────────────────────────
 
 const dupesOverlay   = document.getElementById("dupes-overlay");
@@ -1014,42 +1013,35 @@ async function refreshThumb(node) {
       timeout: appSettings.thumbTimeout || 30,
     });
 
-    // Update state
-    const n = allNodes.find(n => n.id === node.id);
-    if (n) n.thumb = newPath;
     if (activeBookmarkNode?.id === node.id) activeBookmarkNode.thumb = newPath;
+    _applyThumbToCard(node.id, node.title, newPath);
 
-    // Update detail image (cache-bust)
-    const src = convertFileSrc(newPath) + "?t=" + Date.now();
-    detailImgEl.src            = src;
-    detailImgEl.style.display  = "";
+    // Update detail image
+    detailImgEl.src             = convertFileSrc(newPath) + "?t=" + Date.now();
+    detailImgEl.style.display   = "";
     detailNoImgEl.style.display = "none";
-    detailImgEl.onerror = () => {};   // suppress stale error handlers
-
-    // Update grid card if visible
-    const card = gridEl.querySelector(`.card[data-id="${node.id}"]`);
-    if (card) {
-      card.dataset.thumb = newPath;
-      const thumbDiv = card.querySelector(".card-thumb");
-      if (thumbDiv) {
-        let img = thumbDiv.querySelector("img");
-        if (img) {
-          img.src = src;
-        } else {
-          thumbDiv.innerHTML = "";
-          img = document.createElement("img");
-          img.src = src; img.alt = "";
-          img.onerror = () => { img.remove(); thumbDiv.appendChild(makeNoImg(node.title)); };
-          thumbDiv.appendChild(img);
-        }
-      }
-    }
+    detailImgEl.onerror = () => {};
   } catch (err) {
     console.error("refresh_thumb:", err);
   } finally {
     detailLoadingOverlay.classList.remove("visible");
     _isRefreshing = false;
   }
+}
+
+function _applyThumbToCard(id, title, newPath) {
+  const n = allNodes.find(n => n.id === id);
+  if (n) n.thumb = newPath;
+  const card = gridEl.querySelector(`.card[data-id="${id}"]`);
+  if (!card) return;
+  card.dataset.thumb = newPath;
+  const thumbDiv = card.querySelector('.card-thumb');
+  if (!thumbDiv) return;
+  thumbDiv.innerHTML = '';
+  const img = document.createElement('img');
+  img.src = convertFileSrc(newPath);
+  img.onerror = () => { img.remove(); thumbDiv.appendChild(makeNoImg(title)); };
+  thumbDiv.appendChild(img);
 }
 
 async function clearThumb(node) {
@@ -4332,8 +4324,7 @@ function _runThumbWorker() {
   _thumbActive++;
   const item = _thumbQueue.shift();
 
-  const labelEl = document.getElementById('tp-label');
-  if (labelEl) labelEl.textContent = item.title || item.url;
+  document.getElementById('tp-label').textContent = item.title || item.url;
 
   invoke('refresh_thumb', {
     id:      item.id,
@@ -4344,21 +4335,7 @@ function _runThumbWorker() {
   })
     .then(newPath => {
       if (!newPath) return;
-      const n = allNodes.find(n => n.id === item.id);
-      if (n) n.thumb = newPath;
-      // Update grid card if visible
-      const card = gridEl.querySelector(`.card[data-id="${item.id}"]`);
-      if (card) {
-        card.dataset.thumb = newPath;
-        const thumbDiv = card.querySelector('.card-thumb');
-        if (thumbDiv) {
-          thumbDiv.innerHTML = '';
-          const img = document.createElement('img');
-          img.src = convertFileSrc(newPath);
-          img.onerror = () => { img.remove(); thumbDiv.appendChild(makeNoImg(item.title)); };
-          thumbDiv.appendChild(img);
-        }
-      }
+      _applyThumbToCard(item.id, item.title, newPath);
     })
     .catch(() => {})
     .finally(() => {
@@ -4377,7 +4354,6 @@ function startThumbBatch(folderNode) {
   _thumbCancelled = false;
   _thumbQueue     = [];
   _thumbActive    = 0;
-  _thumbDone      = 0;
 
   const bookmarks = allNodes.filter(
     n => n.parent === folderNode.id && n.kind === 'bookmark' && n.url

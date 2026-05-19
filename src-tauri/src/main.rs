@@ -333,25 +333,29 @@ async fn refresh_thumb(
     let tmp_dir = std::env::temp_dir().join(format!("ua_screenshot_{id}"));
     let tmp_dir_str = tmp_dir.to_string_lossy().into_owned();
     let path_str2 = path_str.clone();
-    let url2 = url.clone();
 
     // Run blocking browser process on a dedicated thread so the UI stays responsive
     let status = tauri::async_runtime::spawn_blocking(move || {
-        std::process::Command::new(&browser)
-            .args([
-                "--headless=new",
-                "--disable-gpu",
-                "--no-sandbox",
-                "--hide-scrollbars",
-                &format!("--window-size={w},{h}"),
-                &format!("--timeout={}", t * 1000),
-                &format!("--user-data-dir={tmp_dir_str}"),
-                &format!("--screenshot={path_str2}"),
-                &url2,
-            ])
-            .status()
-            .map_err(|e| e.to_string())
+        #[cfg(windows)]
+        use std::os::windows::process::CommandExt;
+        let mut cmd = std::process::Command::new(&browser);
+        cmd.args([
+            "--headless=new",
+            "--disable-gpu",
+            "--no-sandbox",
+            "--hide-scrollbars",
+            &format!("--window-size={w},{h}"),
+            &format!("--timeout={}", t * 1000),
+            &format!("--user-data-dir={tmp_dir_str}"),
+            &format!("--screenshot={path_str2}"),
+            &url,
+        ]);
+        #[cfg(windows)]
+        cmd.creation_flags(0x0800_0000);
+        cmd.status().map_err(|e| e.to_string())
     }).await.map_err(|e| e.to_string())??;
+
+    let _ = std::fs::remove_dir_all(&tmp_dir);
 
     if !status.success() || !path.exists() {
         return Err("Не удалось создать скриншот".to_string());

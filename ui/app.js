@@ -1187,6 +1187,8 @@ function makeDlgDraggable(dlgEl, handleEl) {
     const r = dlgEl.getBoundingClientRect();
     dlgEl.style.position = "fixed";
     dlgEl.style.margin   = "0";
+    dlgEl.style.bottom   = "auto";
+    dlgEl.style.right    = "auto";
     dlgEl.style.left     = r.left + "px";
     dlgEl.style.top      = r.top  + "px";
     drag = { on: true, ox: e.clientX - r.left, oy: e.clientY - r.top };

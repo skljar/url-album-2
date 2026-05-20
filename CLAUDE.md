@@ -422,6 +422,20 @@ CREATE TABLE nodes (
 31. **Refactor: DnD переписан на event delegation** — вместо handlers на каждом элементе, один `dragover`/`drop` на `treeEl` и `gridEl`. Используется `e.target.closest('.tree-item:not(.link)')` и `.closest('.card-folder')` для определения цели.
 32. **Fix: убрана лишняя проверка "already there"** из `_isDragValid` — теперь перемещение в ту же папку просто делает no-op, но не блокирует drag visually.
 
+### Сессия 8 (2026-05-21) — Тестирование Win7, документация
+33. **Тестирование Windows 7** — установка VirtualBox 7.1.6 + VM Windows 7 Pro SP1 x64:
+    - Guest Additions 7.1.x не устанавливались — `ERROR_AUTHENTICODE_TRUST_NOT_ESTABLISHED` (SHA-2 подпись, нужен KB3033929)
+    - KB3033929 через ISO (создан через PowerShell IMAPI2FS) — не помог, bcdedit testsigning on — тоже
+    - Решение: Guest Additions **6.1.48** (SHA-1 подпись) — установились без патчей
+    - WebView2 bootstrapper: `ProcessPrng не найдена в bcryptprimitives.dll` — функция из Windows 8+
+    - WebView2 v109 (139 МБ, Internet Archive) — та же ошибка
+    - **Вывод: Windows 7/8 не поддерживается** — WebView2 требует Win8+ API (`ProcessPrng` в bcryptprimitives.dll). DLL-шим отклонён — антивирусы будут флагать как малварь.
+34. **README и релиз обновлены** — убраны упоминания Windows 7/8 везде:
+    - `README.md`: требования теперь **Windows 10 / 11** (64-bit)
+    - `dist/URL-Album-2\README.txt`: то же
+    - GitHub release: описание и ZIP обновлены
+    - Минимальная поддерживаемая ОС: **Windows 10**
+
 ### Сессия 6 (2026-05-19) — Багфиксы
 27. **Fix: favicon не появлялись после batch-загрузки** — `_finishFaviconBatch` теперь вызывает `renderTree()` + `loadFolderContents(activeFolderId)` после завершения. Ранее `updateFaviconInDOM` обновлял DOM, но WebView2 не перерисовывал без явного reload.
 28. **Fix: скриншоты зависали на недоступных сайтах** — `spawn()` + poll `try_wait()` каждые 250мс вместо `status()`. Если deadline превышен — `child.kill()` принудительно, браузер всегда завершается в срок.

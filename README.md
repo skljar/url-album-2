@@ -16,10 +16,7 @@
 
 **[URL-Album-2.0-beta.zip (3.7 MB)](https://github.com/skljar/url-album-2/releases/latest/download/URL-Album-2.0-beta.zip)**
 
-Требования: **Windows 7 / 8 / 10 / 11** (64-bit)
-
-> **Windows 7 и 8:** необходимо установить [WebView2 Runtime v109](https://developer.microsoft.com/en-us/microsoft-edge/webview2/#download-section) перед запуском.
-> На Windows 10/11 WebView2 уже встроен.
+Требования: **Windows 10 / 11** (64-bit) — WebView2 уже встроен.
 
 ---
 
@@ -118,7 +115,6 @@ Data\favicons\    ← кэш иконок
 - Восстановление из резервной копии
 - Скриншоты без Edge/Chrome
 - Proxy настройки
-- Windows 7/8
 
 ---
 

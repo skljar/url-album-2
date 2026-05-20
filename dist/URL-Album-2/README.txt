@@ -46,14 +46,10 @@ Data\favicons\  — кэш иконок сайтов
 
 ТРЕБОВАНИЯ
 ----------
-Windows 7 / 8 / 10 / 11 (64-bit)
+Windows 10 / 11 (64-bit)
 Microsoft Edge или Chrome — только для скриншотов сайтов
 (всё остальное работает без браузера)
-
-WINDOWS 7 и 8 — нужно установить WebView2 Runtime:
-https://developer.microsoft.com/en-us/microsoft-edge/webview2/#download-section
-Скачать: "Evergreen Bootstrapper" → запустить → перезапустить URL-Album.exe
-На Windows 10/11 WebView2 уже встроен, ничего устанавливать не нужно.
+WebView2 уже встроен в Windows 10/11, ничего устанавливать не нужно.
 
 ИЗВЕСТНЫЕ ОГРАНИЧЕНИЯ (beta)
 -----------------------------

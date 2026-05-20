@@ -89,7 +89,7 @@
       <div id="detail-view" class="hidden">
         <div id="detail-thumb-wrap">
           <img id="detail-img" src="" alt="">
-          <div id="detail-no-img"></div>
+          <div id="detail-no-img">Нет рисунка — правый клик → Обновить рисунок</div>
           <div id="detail-loading-overlay">
             <span class="detail-loading-text">Загрузка рисунка…</span>
           </div>
@@ -458,6 +458,10 @@
         <button class="dlg-close" id="new-item-x">×</button>
       </div>
       <div class="dlg-body dlg-form">
+        <div id="new-item-folder-row" class="form-row">
+          <label class="form-label">Папка</label>
+          <select class="dlg-input form-field" id="new-item-folder"></select>
+        </div>
         <div class="form-row">
           <label class="form-label">Название</label>
           <input class="dlg-input form-field" id="new-item-name" type="text" autocomplete="off">

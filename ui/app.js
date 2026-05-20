@@ -2339,39 +2339,55 @@ function tbMoveItem(dir) {
 // ── New item dialog (folder / bookmark) ───────────────────────────────────────
 
 (function() {
-  const overlay    = document.getElementById('new-item-overlay');
-  const titleEl    = document.getElementById('new-item-dlg-title');
-  const nameInput  = document.getElementById('new-item-name');
-  const urlInput   = document.getElementById('new-item-url');
-  const noteInput  = document.getElementById('new-item-note');
-  const urlRow     = document.getElementById('new-item-url-row');
-  const noteRow    = document.getElementById('new-item-note-row');
-  const okBtn      = document.getElementById('new-item-ok');
-  let _mode = 'folder'; // 'folder' | 'link'
+  const overlay      = document.getElementById('new-item-overlay');
+  const titleEl      = document.getElementById('new-item-dlg-title');
+  const nameInput    = document.getElementById('new-item-name');
+  const urlInput     = document.getElementById('new-item-url');
+  const noteInput    = document.getElementById('new-item-note');
+  const urlRow       = document.getElementById('new-item-url-row');
+  const noteRow      = document.getElementById('new-item-note-row');
+  const folderSelect = document.getElementById('new-item-folder');
+  const okBtn        = document.getElementById('new-item-ok');
+  let _mode = 'folder';
 
-  function openNewItemDlg(mode) {
+  function _populateFolderSelect(selectedId) {
+    folderSelect.innerHTML = '';
+    const addFolderOpts = (nodes, parentId, depth) => {
+      const children = nodes.filter(n => n.kind === 'folder' && n.parent === parentId);
+      for (const f of children) {
+        const opt = document.createElement('option');
+        opt.value = f.id;
+        opt.textContent = ' '.repeat(depth * 2) + f.title;
+        if (f.id === selectedId) opt.selected = true;
+        folderSelect.appendChild(opt);
+        addFolderOpts(nodes, f.id, depth + 1);
+      }
+    };
+    addFolderOpts(allNodes, null, 0);
+  }
+
+  function openNewItemDlg(mode, prefill = {}) {
     _mode = mode;
     titleEl.textContent = 'Новая ссылка';
-    nameInput.value = '';
-    urlInput.value  = '';
+    nameInput.value = prefill.title || '';
+    urlInput.value  = prefill.url   || '';
     noteInput.value = '';
     urlRow.classList.remove('hidden');
     noteRow.classList.remove('hidden');
+    _populateFolderSelect(activeFolderId);
     raiseOverlay(overlay);
-    setTimeout(() => urlInput.focus(), 30);
+    setTimeout(() => (prefill.url ? nameInput.focus() : urlInput.focus()), 30);
   }
 
-  // Новая папка → всегда root-level, без диалога, с inline rename
-  window.doNewFolder    = () => createFolderAndRename(null);
-  // Новая ссылка → диалог (нужен URL)
-  window.doNewLink      = () => { if (activeFolderId != null) openNewItemDlg('link'); };
+  window.doNewFolder = () => createFolderAndRename(null);
+  window.doNewLink   = () => openNewItemDlg('link');
   // Новая подпапка → вложенная в текущую выбранную папку, с inline rename
   window.doNewSubfolder = () => { if (activeFolderId != null) createFolderAndRename(activeFolderId); };
 
   const warnEl = document.getElementById('new-item-warn');
 
   async function submit() {
-    const pid = activeFolderId;
+    const pid = Number(folderSelect.value) || activeFolderId;
     if (pid == null) return;
     const url = urlInput.value.trim();
     if (!url) return;
@@ -3365,9 +3381,17 @@ async function init() {
     invoke('get_data_dir').then(d => { dataDir = d; }).catch(() => {}),
   ]);
   buildToolbar();
-  // Always open the app — empty DB is a valid state, not first-run.
-  // Welcome screen is available via File menu when needed.
   await showApp();
+
+  // Handle urlalbum:// deep link if app was launched via protocol
+  invoke('get_pending_url').then(pending => {
+    if (!pending) return;
+    if (activeFolderId == null) {
+      alert('Сначала откройте или создайте базу данных (Файл → Создать базу).');
+      return;
+    }
+    openNewItemDlg('link', { url: pending.url, title: pending.title });
+  }).catch(() => {});
 }
 
 // ── Welcome / first-run screen ────────────────────────────────────────────────

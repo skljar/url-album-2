@@ -8,8 +8,9 @@ use rusqlite::Connection;
 use tauri::Manager;
 
 struct AppState {
-    db:      Mutex<Connection>,
-    db_path: Mutex<std::path::PathBuf>, // current active DB path; can change at runtime
+    db:           Mutex<Connection>,
+    db_path:      Mutex<std::path::PathBuf>,
+    pending_open: Mutex<Option<(String, String)>>, // (url, title) from urlalbum:// scheme
 }
 
 // ── Tauri commands ───────────────────────────────────────────────────────────
@@ -1181,6 +1182,73 @@ fn get_db_properties(state: tauri::State<'_, AppState>) -> Result<DbProperties, 
     })
 }
 
+// ── URL scheme (urlalbum://) ─────────────────────────────────────────────────
+
+/// Register urlalbum:// protocol handler in HKCU (no admin required).
+fn register_url_scheme() {
+    let exe = match std::env::current_exe() {
+        Ok(p) => p.to_string_lossy().into_owned(),
+        Err(_) => return,
+    };
+    let cmd_val = format!("\"{}\" \"%1\"", exe);
+    let entries: &[(&str, Option<&str>, &str)] = &[
+        ("HKCU\\Software\\Classes\\urlalbum",                      None,              "URL:URL Album Protocol"),
+        ("HKCU\\Software\\Classes\\urlalbum",                      Some("URL Protocol"), ""),
+        ("HKCU\\Software\\Classes\\urlalbum\\shell\\open\\command", None,              &cmd_val),
+    ];
+    for (key, vname, data) in entries {
+        let mut c = std::process::Command::new("reg");
+        c.args(["add", key, "/f"]);
+        if let Some(v) = vname { c.args(["/v", v]); } else { c.arg("/ve"); }
+        c.args(["/d", data]);
+        #[cfg(windows)] { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }
+        c.output().ok();
+    }
+}
+
+/// Parse urlalbum://add?url=...&title=... into (url, title).
+fn parse_url_scheme(arg: &str) -> Option<(String, String)> {
+    let rest = arg.strip_prefix("urlalbum://add?")?;
+    let mut url = String::new();
+    let mut title = String::new();
+    for part in rest.split('&') {
+        if let Some(v) = part.strip_prefix("url=") {
+            url = urlencoding_decode(v);
+        } else if let Some(v) = part.strip_prefix("title=") {
+            title = urlencoding_decode(v);
+        }
+    }
+    if url.is_empty() { return None; }
+    Some((url, title))
+}
+
+fn urlencoding_decode(s: &str) -> String {
+    let s = s.replace('+', " ");
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let h1 = chars.next().unwrap_or('0');
+            let h2 = chars.next().unwrap_or('0');
+            if let Ok(b) = u8::from_str_radix(&format!("{}{}", h1, h2), 16) {
+                out.push(b as char);
+                continue;
+            }
+        }
+        out.push(c);
+    }
+    out
+}
+
+#[derive(serde::Serialize)]
+struct PendingOpen { url: String, title: String }
+
+#[tauri::command]
+fn get_pending_url(state: tauri::State<'_, AppState>) -> Option<PendingOpen> {
+    let mut p = state.pending_open.lock().ok()?;
+    p.take().map(|(url, title)| PendingOpen { url, title })
+}
+
 // ── Browser detection ────────────────────────────────────────────────────────
 
 #[derive(serde::Serialize, Clone)]
@@ -1691,10 +1759,19 @@ fn main() {
             // Persist the resolved path so the next startup knows what was open.
             save_last_db(&db_path);
 
+            // Parse urlalbum:// from command line if launched via protocol
+            let pending = std::env::args().skip(1)
+                .find(|a| a.starts_with("urlalbum://"))
+                .and_then(|a| parse_url_scheme(&a));
+
             app.manage(AppState {
-                db:      Mutex::new(conn),
-                db_path: Mutex::new(db_path),
+                db:           Mutex::new(conn),
+                db_path:      Mutex::new(db_path),
+                pending_open: Mutex::new(pending),
             });
+
+            // Register urlalbum:// protocol handler (idempotent)
+            register_url_scheme();
 
             Ok(())
         })
@@ -1761,6 +1838,7 @@ fn main() {
             close_db,
             get_recent_dbs,
             get_db_properties,
+            get_pending_url,
         ])
         .on_window_event(|_window, event| {
             // Checkpoint WAL into main file on every window close so data

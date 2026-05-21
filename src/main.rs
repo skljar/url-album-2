@@ -233,6 +233,21 @@ fn copy_to_clipboard(text: &str) {
     }
 }
 
+fn browser_bookmark_paths() -> Vec<std::path::PathBuf> {
+    let mut paths = Vec::new();
+    let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
+    let roaming = std::env::var("APPDATA").unwrap_or_default();
+    let browsers = [
+        format!("{local}\\Google\\Chrome\\User Data\\Default\\Bookmarks"),
+        format!("{local}\\Microsoft\\Edge\\User Data\\Default\\Bookmarks"),
+        format!("{local}\\BraveSoftware\\Brave-Browser\\User Data\\Default\\Bookmarks"),
+        format!("{roaming}\\Opera Software\\Opera Stable\\Bookmarks"),
+        format!("{local}\\Chromium\\User Data\\Default\\Bookmarks"),
+    ];
+    for p in browsers { let pb = std::path::PathBuf::from(p); if pb.exists() { paths.push(pb); } }
+    paths
+}
+
 fn show_ctx_folder(ui: &MainWindow, id: i32) {
     ui.set_ctx_is_folder(true); ui.set_ctx_id(id); ui.set_show_ctx(true);
 }
@@ -561,6 +576,35 @@ fn main() {
             match st.db.import_html(&path) {
                 Ok(n) => { ui.set_status_text(SharedString::from(format!("Импорт HTML: {n} ссылок"))); refresh_ui(&ui, &st); }
                 Err(e) => ui.set_status_text(SharedString::from(format!("Ошибка: {e}"))),
+            }
+        } }); }
+
+    // ── Import from browser ───────────────────────────────────────────────────
+    { let s = state.clone(); let w = ui.as_weak();
+      ui.on_import_browser(move || {
+        let ui = w.unwrap();
+        // Try to find Chrome/Edge bookmarks automatically
+        let candidates = browser_bookmark_paths();
+        let filter: Vec<&str> = vec![];
+        let mut dialog = rfd::FileDialog::new()
+            .add_filter("Bookmarks JSON", &["json", "Bookmarks"])
+            .add_filter("All files", &["*"]);
+        if let Some(first) = candidates.first() {
+            if let Some(dir) = first.parent() {
+                dialog = dialog.set_directory(dir);
+            }
+        }
+        if let Some(path) = dialog.pick_file() {
+            let _ = filter;
+            let mut st = s.lock().unwrap();
+            match st.db.import_chrome_json(&path) {
+                Ok(n) if n > 0 => { ui.set_status_text(SharedString::from(format!("Импорт браузера: {n} ссылок"))); refresh_ui(&ui, &st); }
+                _ => {
+                    match st.db.import_html(&path) {
+                        Ok(n) => { ui.set_status_text(SharedString::from(format!("Импорт HTML: {n} ссылок"))); refresh_ui(&ui, &st); }
+                        Err(e) => ui.set_status_text(SharedString::from(format!("Ошибка: {e}"))),
+                    }
+                }
             }
         } }); }
 

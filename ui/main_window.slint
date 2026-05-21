@@ -90,6 +90,7 @@ export component MainWindow inherits Window {
     callback export-txt();
     callback import-uadat();
     callback import-html();
+    callback import-browser();
 
     // Callbacks — other
     callback search-changed(string);
@@ -149,8 +150,9 @@ export component MainWindow inherits Window {
                     Button { text: "→ HTML"; clicked => { root.export-html(); } }
                     Button { text: "→ TXT";  clicked => { root.export-txt(); } }
                     Rectangle { width: 4px; }
-                    Button { text: "← ua.dat"; clicked => { root.import-uadat(); } }
-                    Button { text: "← HTML";   clicked => { root.import-html(); } }
+                    Button { text: "← ua.dat";   clicked => { root.import-uadat(); } }
+                    Button { text: "← HTML";     clicked => { root.import-html(); } }
+                    Button { text: "← Браузер";  clicked => { root.import-browser(); } }
                     Rectangle { width: 4px; }
                     Button { text: "Favicons"; clicked => { root.load-favicons(); } }
                     Button { text: "Проверка"; clicked => { root.check-links(); } }

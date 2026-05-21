@@ -283,6 +283,74 @@ impl Database {
         }
         Ok(count)
     }
+
+    // ── Import from browser ───────────────────────────────────────────────────
+
+    pub fn import_chrome_json(&self, path: &Path) -> Result<usize> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
+        let mut count = 0;
+        self.parse_chrome_node(&content, None, &mut count)?;
+        Ok(count)
+    }
+
+    fn parse_chrome_node(&self, json: &str, parent: Option<i64>, count: &mut usize) -> Result<()> {
+        // Simple recursive JSON traversal without external JSON parser
+        // Find all "children" arrays and "url"/"name" objects
+        let mut pos = 0;
+        while pos < json.len() {
+            if let Some(idx) = json[pos..].find("\"type\": \"folder\"").or_else(|| json[pos..].find("\"type\":\"folder\"")) {
+                let start = idx + pos;
+                // Find enclosing object: scan backwards for opening {
+                let obj_start = json[..start].rfind('{').unwrap_or(0);
+                let name = extract_json_str(&json[obj_start..], "name").unwrap_or("Folder");
+                let folder_id = self.create_folder(parent, &name)?;
+                // Find children array
+                if let Some(ch_idx) = json[obj_start..].find("\"children\"") {
+                    let ch_start = obj_start + ch_idx;
+                    if let Some(arr_start) = json[ch_start..].find('[') {
+                        let arr_pos = ch_start + arr_start;
+                        // Find matching ] - simplified: just recurse on the slice
+                        let slice_end = find_matching_bracket(&json[arr_pos..]).unwrap_or(json.len() - arr_pos);
+                        self.parse_chrome_node(&json[arr_pos..arr_pos+slice_end], Some(folder_id), count)?;
+                    }
+                }
+                pos = start + 10;
+            } else if let Some(idx) = json[pos..].find("\"type\": \"url\"").or_else(|| json[pos..].find("\"type\":\"url\"")) {
+                let start = idx + pos;
+                let obj_start = json[..start].rfind('{').unwrap_or(0);
+                let url = extract_json_str(&json[obj_start..], "url").unwrap_or("");
+                let name = extract_json_str(&json[obj_start..], "name").unwrap_or(url);
+                if !url.is_empty() {
+                    let p = parent.unwrap_or_else(|| self.create_folder(None, "Chrome Import").unwrap_or(1));
+                    self.create_bookmark(p, &name, &url)?;
+                    *count += 1;
+                }
+                pos = start + 10;
+            } else {
+                break;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn extract_json_str<'a>(json: &'a str, key: &str) -> Option<&'a str> {
+    let needle = format!("\"{}\":", key);
+    let pos = json.find(&needle)?;
+    let after = json[pos + needle.len()..].trim_start();
+    if !after.starts_with('"') { return None; }
+    let content = &after[1..];
+    let end = content.find('"')?;
+    Some(&content[..end])
+}
+
+fn find_matching_bracket(s: &str) -> Option<usize> {
+    let mut depth = 0i32;
+    for (i, c) in s.chars().enumerate() {
+        match c { '[' => depth += 1, ']' => { depth -= 1; if depth == 0 { return Some(i + 1); } } _ => {} }
+    }
+    None
 }
 
 fn esc(s: &str) -> String {

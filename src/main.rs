@@ -88,6 +88,10 @@ impl State {
         for (i, f) in all.iter().enumerate() { children.entry(f.parent_id).or_default().push(i); }
         let mut result: Vec<FolderNode> = Vec::new();
         Self::walk(&all, &children, &self.expanded, self.active_folder, None, 0, &mut result);
+        // Fill counts
+        for node in &mut result {
+            node.count = self.db.bookmark_count(node.id as i64) as i32;
+        }
         ModelRc::new(VecModel::from(result))
     }
 
@@ -102,6 +106,7 @@ impl State {
                     depth, expanded: expanded.contains(&f.id),
                     has_children: children.contains_key(&Some(f.id)),
                     selected: active == Some(f.id),
+                    count: 0, // filled below
                 });
                 if expanded.contains(&f.id) {
                     Self::walk(all, children, expanded, active, Some(f.id), depth + 1, out);

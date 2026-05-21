@@ -7,6 +7,7 @@ export struct FolderNode {
     expanded: bool,
     has-children: bool,
     selected: bool,
+    count: int,   // bookmark count in this folder
 }
 
 export struct BookmarkItem {
@@ -222,6 +223,20 @@ export component MainWindow inherits Window {
                                         color: f.selected ? #ffffff : #1a1a1a;
                                         font-size: 13px; vertical-alignment: center;
                                         overflow: elide; horizontal-stretch: 1;
+                                    }
+
+                                    if f.count > 0: Rectangle {
+                                        width: max(18px, f.count > 99 ? 28px : f.count > 9 ? 22px : 18px);
+                                        height: 14px;
+                                        background: f.selected ? #ffffff30 : #0078d420;
+                                        border-radius: 7px;
+                                        Text {
+                                            text: f.count > 99 ? "99+" : f.count;
+                                            color: f.selected ? #ffffff : #0078d4;
+                                            font-size: 9px;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
                                     }
                                 }
                             }

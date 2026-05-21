@@ -102,6 +102,7 @@ export component MainWindow inherits Window {
     callback load-favicons();
     callback focus-search();
     callback check-links();
+    callback find-duplicates();
 
     callback folder-right-click(int);
     callback bookmark-right-click(int);
@@ -159,6 +160,7 @@ export component MainWindow inherits Window {
                     Rectangle { width: 4px; }
                     Button { text: "Favicons"; clicked => { root.load-favicons(); } }
                     Button { text: "Проверка"; clicked => { root.check-links(); } }
+                    Button { text: "Дубли";    clicked => { root.find-duplicates(); } }
                 }
             }
 

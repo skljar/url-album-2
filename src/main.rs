@@ -595,6 +595,29 @@ fn main() {
             }
         } }); }
 
+    // ── Find duplicates ───────────────────────────────────────────────────────
+    { let s = state.clone(); let w = ui.as_weak();
+      ui.on_find_duplicates(move || {
+        let ui = w.unwrap(); let mut st = s.lock().unwrap();
+        let dups = st.db.find_duplicates().unwrap_or_default();
+        let n = dups.len();
+        if n == 0 {
+            ui.set_status_text(SharedString::from("Дубликатов не найдено"));
+            return;
+        }
+        // Show duplicates in bookmark list (clear folder selection)
+        st.active_folder = None; st.selected_bookmark = None;
+        let vec: Vec<BookmarkItem> = dups.into_iter().map(|b| BookmarkItem {
+            id: b.id as i32, title: SharedString::from(b.title.as_str()),
+            url: SharedString::from(b.url.as_deref().unwrap_or("")),
+            note: SharedString::from(b.note.as_deref().unwrap_or("")),
+            favicon: Image::default(), has_favicon: false, check_status: SharedString::default(),
+            selected: false,
+        }).collect();
+        ui.set_bookmarks(ModelRc::new(VecModel::from(vec)));
+        ui.set_status_text(SharedString::from(format!("Найдено дубликатов: {n} — удалите лишние через Del или контекстное меню")));
+        ui.set_folders(st.build_folder_model()); }); }
+
     // ── Import from browser ───────────────────────────────────────────────────
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_import_browser(move || {

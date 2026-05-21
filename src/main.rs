@@ -486,6 +486,17 @@ fn main() {
             }
         } }); }
 
+    // ── Backup ────────────────────────────────────────────────────────────────
+    { let s = state.clone(); let w = ui.as_weak();
+      ui.on_backup_db(move || {
+        let ui = w.unwrap(); let st = s.lock().unwrap();
+        if let Some(path) = rfd::FileDialog::new().add_filter("Database", &["db"]).set_file_name("backup.db").save_file() {
+            match st.db.backup(&path) {
+                Ok(_) => ui.set_status_text(SharedString::from(format!("Резервная копия: {}", path.display()))),
+                Err(e) => ui.set_status_text(SharedString::from(format!("Ошибка: {e}"))),
+            }
+        } }); }
+
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_export_html(move || {
         let ui = w.unwrap(); let st = s.lock().unwrap();

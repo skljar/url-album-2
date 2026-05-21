@@ -34,6 +34,13 @@ impl Database {
             .parent().unwrap_or(Path::new(".")).join("album.db")
     }
 
+    pub fn backup(&self, dest: &std::path::PathBuf) -> Result<()> {
+        let mut dst = Connection::open(dest)?;
+        let backup = rusqlite::backup::Backup::new(&self.conn, &mut dst)?;
+        backup.run_to_completion(5, std::time::Duration::from_millis(250), None)?;
+        Ok(())
+    }
+
     pub fn init_schema(&self) -> Result<()> {
         self.conn.execute_batch("
             CREATE TABLE IF NOT EXISTS nodes (

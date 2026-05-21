@@ -18,6 +18,29 @@ struct State {
     sort_asc: bool,
     data_dir: std::path::PathBuf,
     check_results: std::collections::HashMap<i64, (bool, String)>,
+    tree_width: f32,
+}
+
+impl State {
+    fn settings_path() -> std::path::PathBuf {
+        std::env::current_exe().unwrap_or_default()
+            .parent().unwrap_or(std::path::Path::new(".")).join("settings.json")
+    }
+    fn save_settings(&self) {
+        let json = format!("{{\"tree_width\":{}}}", self.tree_width);
+        let _ = std::fs::write(Self::settings_path(), json.as_bytes());
+    }
+    fn load_settings() -> f32 {
+        let path = Self::settings_path();
+        if let Ok(s) = std::fs::read_to_string(&path) {
+            if let Some(start) = s.find("\"tree_width\":") {
+                let rest = &s[start + 13..];
+                let end = rest.find(|c: char| !c.is_ascii_digit() && c != '.').unwrap_or(rest.len());
+                if let Ok(v) = rest[..end].parse::<f32>() { return v.max(100.0).min(500.0); }
+            }
+        }
+        210.0
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -27,12 +50,14 @@ impl State {
     fn new(db: Database) -> Self {
         let data_dir = std::env::current_exe().unwrap_or_default()
             .parent().unwrap_or(std::path::Path::new(".")).join("Data");
+        let tree_width = State::load_settings();
         State {
             db, expanded: HashSet::new(),
             active_folder: None, selected_bookmark: None,
             search_query: String::new(),
             sort_by: SortBy::Title, sort_asc: true,
             data_dir, check_results: Default::default(),
+            tree_width,
         }
     }
 
@@ -227,7 +252,16 @@ fn main() {
 
     let state = Arc::new(Mutex::new(State::new(db)));
     let ui = MainWindow::new().unwrap();
+    { let st = state.lock().unwrap();
+      ui.set_tree_width_px(st.tree_width as i32); }
     refresh_ui(&ui, &state.lock().unwrap());
+
+    // ── Splitter ──────────────────────────────────────────────────────────────
+    { let s = state.clone();
+      ui.on_tree_width_changed(move |w| {
+        let mut st = s.lock().unwrap();
+        st.tree_width = w as f32;
+        st.save_settings(); }); }
 
     // ── Navigation ────────────────────────────────────────────────────────────
 

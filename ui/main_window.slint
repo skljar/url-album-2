@@ -35,7 +35,11 @@ export component MainWindow inherits Window {
     in property <string> detail-title: "";
     in property <string> detail-url: "";
     in property <string> detail-note: "";
-    in property <string> sort-label: "По названию ↑";
+    in property <string> sort-label: "Название ↑";
+
+    // Tree width (resizable, stored as int pixels)
+    in-out property <int> tree-width-px: 210;
+    property <length> tree-width: root.tree-width-px * 1px;
 
     // Dialog flags
     in-out property <bool> show-folder-dlg: false;
@@ -88,6 +92,7 @@ export component MainWindow inherits Window {
     // Callbacks — other
     callback search-changed(string);
     callback sort-toggle();
+    callback tree-width-changed(int);
     callback load-favicons();
     callback check-links();
 
@@ -153,7 +158,7 @@ export component MainWindow inherits Window {
 
                 // Left: folder tree
                 Rectangle {
-                    width: 210px;
+                    width: root.tree-width;
                     background: #fafafa;
                     border-color: #e0e0e0;
                     border-width: 1px;
@@ -203,6 +208,19 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+
+                // Splitter
+                Rectangle {
+                    width: 4px;
+                    background: #e0e0e0;
+                    splitter-ta := TouchArea {
+                        mouse-cursor: col-resize;
+                        moved => {
+                            root.tree-width-px = max(100, min(500, root.tree-width-px + round(self.mouse-x / 1px)));
+                            root.tree-width-changed(root.tree-width-px);
                         }
                     }
                 }

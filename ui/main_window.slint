@@ -1,4 +1,4 @@
-import { Button, HorizontalBox, VerticalBox, LineEdit, ScrollView, TextEdit } from "std-widgets.slint";
+import { Button, HorizontalBox, VerticalBox, LineEdit, ScrollView } from "std-widgets.slint";
 
 export struct FolderNode {
     id: int,
@@ -32,6 +32,7 @@ export component MainWindow inherits Window {
     in property <string> detail-title: "";
     in property <string> detail-url: "";
     in property <string> detail-note: "";
+    in property <string> sort-label: "По названию ↑";
 
     // Dialog flags
     in-out property <bool> show-folder-dlg: false;
@@ -43,13 +44,19 @@ export component MainWindow inherits Window {
     in-out property <string> edit-url-val: "";
     in-out property <string> edit-note-val: "";
 
-    // Navigation callbacks
+    // Context menu
+    in-out property <bool> show-ctx: false;
+    in-out property <bool> ctx-is-folder: false;
+    in-out property <int>  ctx-id: 0;
+
+    // Callbacks — navigation
     callback folder-clicked(int);
     callback folder-toggle(int);
     callback bookmark-clicked(int);
     callback bookmark-open(string);
+    callback bookmark-nav(int);  // +1 or -1 arrow key
 
-    // CRUD callbacks
+    // Callbacks — CRUD
     callback new-folder-confirmed(string);
     callback new-bookmark-confirmed(string, string);
     callback rename-requested();
@@ -58,7 +65,16 @@ export component MainWindow inherits Window {
     callback edit-confirmed(string, string, string);
     callback delete-selected();
 
-    // DB & import/export
+    // Callbacks — context menu actions
+    callback ctx-open(int);
+    callback ctx-edit(int);
+    callback ctx-rename(int);
+    callback ctx-delete(int);
+    callback ctx-new-sub(int);
+    callback ctx-new-bm-in(int);
+    callback ctx-copy-url(int);
+
+    // Callbacks — DB & files
     callback open-db();
     callback new-db();
     callback export-html();
@@ -66,8 +82,12 @@ export component MainWindow inherits Window {
     callback import-uadat();
     callback import-html();
 
-    // Search
+    // Callbacks — other
     callback search-changed(string);
+    callback sort-toggle();
+
+    callback folder-right-click(int);
+    callback bookmark-right-click(int);
 
     // ── Keyboard
     forward-focus: main-focus;
@@ -77,6 +97,8 @@ export component MainWindow inherits Window {
             if e.text == Key.F2       { root.rename-requested(); return accept; }
             if e.text == Key.F4       { root.edit-requested(); return accept; }
             if e.text == Key.Return   { if root.detail-url != "" { root.bookmark-open(root.detail-url); } return accept; }
+            if e.text == Key.UpArrow  { root.bookmark-nav(-1); return accept; }
+            if e.text == Key.DownArrow{ root.bookmark-nav(1);  return accept; }
             reject
         }
 
@@ -84,48 +106,34 @@ export component MainWindow inherits Window {
             padding: 0px;
             spacing: 0px;
 
-            // ── Toolbar row 1: edit + search
+            // ── Toolbar row 1
             Rectangle {
                 height: 34px;
                 background: #f5f5f5;
-
                 HorizontalBox {
-                    padding: 4px;
-                    spacing: 4px;
-                    alignment: start;
-
-                    Button { text: "+ Папка";  clicked => { root.show-folder-dlg = true; } }
-                    Button { text: "+ Ссылка"; clicked => { root.show-bookmark-dlg = true; } }
-                    Button { text: "Ред. [F4]"; clicked => { root.edit-requested(); } }
-                    Button { text: "Имя [F2]";  clicked => { root.rename-requested(); } }
+                    padding: 4px; spacing: 4px; alignment: start;
+                    Button { text: "+ Папка";       clicked => { root.show-folder-dlg = true; } }
+                    Button { text: "+ Ссылка";      clicked => { root.show-bookmark-dlg = true; } }
+                    Button { text: "Ред. [F4]";     clicked => { root.edit-requested(); } }
+                    Button { text: "Имя [F2]";      clicked => { root.rename-requested(); } }
                     Button { text: "Удалить [Del]"; clicked => { root.delete-selected(); } }
-
                     Rectangle { horizontal-stretch: 1; }
-
-                    LineEdit {
-                        width: 190px;
-                        placeholder-text: "Поиск...";
-                        edited => { root.search-changed(self.text); }
-                    }
+                    LineEdit { width: 190px; placeholder-text: "Поиск..."; edited => { root.search-changed(self.text); } }
                 }
             }
 
-            // ── Toolbar row 2: DB + import/export
+            // ── Toolbar row 2
             Rectangle {
                 height: 30px;
                 background: #eeeeee;
-
                 HorizontalBox {
-                    padding: 3px;
-                    spacing: 3px;
-                    alignment: start;
-
+                    padding: 3px; spacing: 3px; alignment: start;
                     Button { text: "БД: Новая";   clicked => { root.new-db(); } }
                     Button { text: "БД: Открыть"; clicked => { root.open-db(); } }
-                    Rectangle { width: 6px; }
+                    Rectangle { width: 4px; }
                     Button { text: "→ HTML"; clicked => { root.export-html(); } }
                     Button { text: "→ TXT";  clicked => { root.export-txt(); } }
-                    Rectangle { width: 6px; }
+                    Rectangle { width: 4px; }
                     Button { text: "← ua.dat"; clicked => { root.import-uadat(); } }
                     Button { text: "← HTML";   clicked => { root.import-html(); } }
                 }
@@ -133,9 +141,7 @@ export component MainWindow inherits Window {
 
             // ── Main area
             HorizontalBox {
-                padding: 0px;
-                spacing: 0px;
-                vertical-stretch: 1;
+                padding: 0px; spacing: 0px; vertical-stretch: 1;
 
                 // Left: folder tree
                 Rectangle {
@@ -146,44 +152,46 @@ export component MainWindow inherits Window {
 
                     ScrollView {
                         VerticalBox {
-                            padding: 4px;
-                            spacing: 1px;
-                            alignment: start;
+                            padding: 4px; spacing: 1px; alignment: start;
 
                             for f in root.folders: Rectangle {
                                 height: 24px;
                                 background: f.selected ? #0078d4 : transparent;
                                 border-radius: 3px;
 
-                                TouchArea { clicked => { root.folder-clicked(f.id); } }
+                                // Left-click
+                                left-ta := TouchArea {
+                                    clicked => { root.folder-clicked(f.id); }
+                                }
+
+                                right-ta := TouchArea {
+                                    pointer-event(e) => {
+                                        if e.button == PointerEventButton.right && e.kind == PointerEventKind.down {
+                                            root.folder-right-click(f.id);
+                                        }
+                                    }
+                                }
 
                                 HorizontalBox {
                                     padding-left: f.depth * 14px + 2px;
-                                    padding-right: 4px;
-                                    padding-top: 2px;
-                                    padding-bottom: 2px;
+                                    padding-right: 4px; padding-top: 2px; padding-bottom: 2px;
                                     spacing: 3px;
 
                                     Rectangle {
-                                        width: 14px;
-                                        background: transparent;
+                                        width: 14px; background: transparent;
                                         Text {
                                             text: f.has-children ? (f.expanded ? "v" : ">") : " ";
                                             color: f.selected ? #ffffff : #aaaaaa;
                                             font-size: 9px;
-                                            horizontal-alignment: center;
-                                            vertical-alignment: center;
+                                            horizontal-alignment: center; vertical-alignment: center;
                                         }
                                         TouchArea { clicked => { root.folder-toggle(f.id); } }
                                     }
-
                                     Text {
                                         text: f.title;
                                         color: f.selected ? #ffffff : #1a1a1a;
-                                        font-size: 13px;
-                                        vertical-alignment: center;
-                                        overflow: elide;
-                                        horizontal-stretch: 1;
+                                        font-size: 13px; vertical-alignment: center;
+                                        overflow: elide; horizontal-stretch: 1;
                                     }
                                 }
                             }
@@ -193,11 +201,9 @@ export component MainWindow inherits Window {
 
                 // Right: list + detail
                 VerticalBox {
-                    padding: 0px;
-                    spacing: 0px;
-                    horizontal-stretch: 1;
+                    padding: 0px; spacing: 0px; horizontal-stretch: 1;
 
-                    // Column headers
+                    // Column headers with sort
                     Rectangle {
                         height: 22px;
                         background: #f0f0f0;
@@ -205,10 +211,15 @@ export component MainWindow inherits Window {
                         border-width: 1px;
 
                         HorizontalBox {
-                            padding-left: 6px;
-                            spacing: 0px;
-                            Text { text: "Название"; font-size: 11px; color: #666; width: 250px; vertical-alignment: center; }
-                            Text { text: "URL";      font-size: 11px; color: #666; vertical-alignment: center; }
+                            padding-left: 6px; spacing: 0px;
+                            Text { text: "Название"; font-size: 11px; color: #555; width: 250px; vertical-alignment: center; }
+                            Text { text: "URL"; font-size: 11px; color: #555; horizontal-stretch: 1; vertical-alignment: center; }
+                            Rectangle { width: 4px; }
+                            Button {
+                                text: root.sort-label;
+                                clicked => { root.sort-toggle(); }
+                            }
+                            Rectangle { width: 4px; }
                         }
                     }
 
@@ -216,43 +227,33 @@ export component MainWindow inherits Window {
                     ScrollView {
                         vertical-stretch: 1;
                         VerticalBox {
-                            padding: 4px;
-                            spacing: 1px;
-                            alignment: start;
+                            padding: 4px; spacing: 1px; alignment: start;
 
                             for b in root.bookmarks: Rectangle {
                                 height: 22px;
                                 background: b.selected ? #0078d4 : transparent;
                                 border-radius: 2px;
 
-                                TouchArea {
+                                bm-left := TouchArea {
                                     clicked => { root.bookmark-clicked(b.id); }
                                     double-clicked => { root.bookmark-open(b.url); }
                                 }
 
-                                HorizontalBox {
-                                    padding-left: 6px;
-                                    padding-right: 4px;
-                                    padding-top: 2px;
-                                    padding-bottom: 2px;
-                                    spacing: 0px;
+                                TouchArea {
+                                    pointer-event(e) => {
+                                        if e.button == PointerEventButton.right && e.kind == PointerEventKind.down {
+                                            root.bookmark-right-click(b.id);
+                                        }
+                                    }
+                                }
 
-                                    Text {
-                                        text: b.title;
-                                        color: b.selected ? #ffffff : #1a1a1a;
-                                        font-size: 13px;
-                                        vertical-alignment: center;
-                                        width: 250px;
-                                        overflow: elide;
-                                    }
-                                    Text {
-                                        text: b.url;
-                                        color: b.selected ? #bbddff : #0055cc;
-                                        font-size: 12px;
-                                        vertical-alignment: center;
-                                        overflow: elide;
-                                        horizontal-stretch: 1;
-                                    }
+                                HorizontalBox {
+                                    padding-left: 6px; padding-right: 4px;
+                                    padding-top: 2px; padding-bottom: 2px; spacing: 0px;
+                                    Text { text: b.title; color: b.selected ? #ffffff : #1a1a1a;
+                                        font-size: 13px; vertical-alignment: center; width: 250px; overflow: elide; }
+                                    Text { text: b.url; color: b.selected ? #bbddff : #0055cc;
+                                        font-size: 12px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                                 }
                             }
                         }
@@ -260,34 +261,13 @@ export component MainWindow inherits Window {
 
                     // Detail panel
                     if root.detail-url != "": Rectangle {
-                        height: 54px;
-                        background: #f0f4ff;
-                        border-color: #b8caf0;
-                        border-width: 1px;
-
+                        height: 54px; background: #f0f4ff;
+                        border-color: #b8caf0; border-width: 1px;
                         VerticalBox {
-                            padding: 6px;
-                            spacing: 2px;
-
-                            Text {
-                                text: root.detail-title;
-                                font-size: 13px;
-                                font-weight: 700;
-                                color: #111;
-                                overflow: elide;
-                            }
-                            Text {
-                                text: root.detail-url;
-                                font-size: 11px;
-                                color: #0044aa;
-                                overflow: elide;
-                            }
-                            if root.detail-note != "": Text {
-                                text: root.detail-note;
-                                font-size: 11px;
-                                color: #555;
-                                overflow: elide;
-                            }
+                            padding: 6px; spacing: 2px;
+                            Text { text: root.detail-title; font-size: 13px; font-weight: 700; color: #111; overflow: elide; }
+                            Text { text: root.detail-url; font-size: 11px; color: #0044aa; overflow: elide; }
+                            if root.detail-note != "": Text { text: root.detail-note; font-size: 11px; color: #555; overflow: elide; }
                         }
                     }
                 }
@@ -295,10 +275,7 @@ export component MainWindow inherits Window {
 
             // Status bar
             Rectangle {
-                height: 20px;
-                background: #f0f0f0;
-                border-color: #ddd;
-                border-width: 1px;
+                height: 20px; background: #f0f0f0; border-color: #ddd; border-width: 1px;
                 HorizontalBox {
                     padding-left: 8px;
                     Text { text: root.status-text; font-size: 11px; color: #555; vertical-alignment: center; }
@@ -307,100 +284,160 @@ export component MainWindow inherits Window {
         }
     }
 
-    // ══ Dialogs ════════════════════════════════════════════════════════════════
+    // ══ Context menu overlay ══════════════════════════════════════════════════
+    if root.show-ctx: Rectangle {
+        background: transparent;
+        TouchArea { clicked => { root.show-ctx = false; } }
 
-    // New Folder
+        Rectangle {
+            x: root.ctx-is-folder ? 215px : 450px;
+            y: 90px;
+            width: 185px;
+            background: #ffffff;
+            border-color: #aaa;
+            border-width: 1px;
+            drop-shadow-blur: 8px;
+            drop-shadow-color: #30000000;
+
+            VerticalBox {
+                padding: 2px; spacing: 0px;
+
+                if root.ctx-is-folder: Rectangle {
+                    height: 24px; border-radius: 2px;
+                    background: folder-open-ta.has-hover ? #0078d4 : transparent;
+                    folder-open-ta := TouchArea {
+                        clicked => { root.show-ctx = false; root.folder-clicked(root.ctx-id); }
+                    }
+                    Text { text: "Открыть"; x: 8px; font-size: 13px;
+                        color: folder-open-ta.has-hover ? #fff : #1a1a1a; vertical-alignment: center; }
+                }
+
+                if root.ctx-is-folder: Rectangle {
+                    height: 24px; border-radius: 2px;
+                    background: ns-ta.has-hover ? #0078d4 : transparent;
+                    ns-ta := TouchArea { clicked => { root.show-ctx = false; root.ctx-new-sub(root.ctx-id); } }
+                    Text { text: "+ Подпапка"; x: 8px; font-size: 13px;
+                        color: ns-ta.has-hover ? #fff : #1a1a1a; vertical-alignment: center; }
+                }
+
+                if root.ctx-is-folder: Rectangle {
+                    height: 24px; border-radius: 2px;
+                    background: nb-ta.has-hover ? #0078d4 : transparent;
+                    nb-ta := TouchArea { clicked => { root.show-ctx = false; root.ctx-new-bm-in(root.ctx-id); } }
+                    Text { text: "+ Ссылка в папку"; x: 8px; font-size: 13px;
+                        color: nb-ta.has-hover ? #fff : #1a1a1a; vertical-alignment: center; }
+                }
+
+                if !root.ctx-is-folder: Rectangle {
+                    height: 24px; border-radius: 2px;
+                    background: bm-open-ta.has-hover ? #0078d4 : transparent;
+                    bm-open-ta := TouchArea { clicked => { root.show-ctx = false; root.ctx-open(root.ctx-id); } }
+                    Text { text: "Открыть URL"; x: 8px; font-size: 13px;
+                        color: bm-open-ta.has-hover ? #fff : #1a1a1a; vertical-alignment: center; }
+                }
+
+                if !root.ctx-is-folder: Rectangle {
+                    height: 24px; border-radius: 2px;
+                    background: bm-edit-ta.has-hover ? #0078d4 : transparent;
+                    bm-edit-ta := TouchArea { clicked => { root.show-ctx = false; root.ctx-edit(root.ctx-id); } }
+                    Text { text: "Свойства [F4]"; x: 8px; font-size: 13px;
+                        color: bm-edit-ta.has-hover ? #fff : #1a1a1a; vertical-alignment: center; }
+                }
+
+                if !root.ctx-is-folder: Rectangle {
+                    height: 24px; border-radius: 2px;
+                    background: bm-copy-ta.has-hover ? #0078d4 : transparent;
+                    bm-copy-ta := TouchArea { clicked => { root.show-ctx = false; root.ctx-copy-url(root.ctx-id); } }
+                    Text { text: "Копировать URL"; x: 8px; font-size: 13px;
+                        color: bm-copy-ta.has-hover ? #fff : #1a1a1a; vertical-alignment: center; }
+                }
+
+                // Separator
+                Rectangle { height: 1px; background: #ddd; }
+
+                // Common: rename
+                Rectangle {
+                    height: 24px; border-radius: 2px;
+                    background: rn-ta.has-hover ? #0078d4 : transparent;
+                    rn-ta := TouchArea { clicked => { root.show-ctx = false; root.ctx-rename(root.ctx-id); } }
+                    Text { text: "Переименовать [F2]"; x: 8px; font-size: 13px;
+                        color: rn-ta.has-hover ? #fff : #1a1a1a; vertical-alignment: center; }
+                }
+
+                // Common: delete
+                Rectangle {
+                    height: 24px; border-radius: 2px;
+                    background: del-ta.has-hover ? #cc2200 : transparent;
+                    del-ta := TouchArea { clicked => { root.show-ctx = false; root.ctx-delete(root.ctx-id); } }
+                    Text { text: "Удалить [Del]"; x: 8px; font-size: 13px;
+                        color: del-ta.has-hover ? #fff : #cc2200; vertical-alignment: center; }
+                }
+            }
+        }
+    }
+
+    // ══ CRUD Dialogs ═══════════════════════════════════════════════════════════
+
     if root.show-folder-dlg: Rectangle {
         background: #88000000;
         TouchArea { clicked => { root.show-folder-dlg = false; } }
         Rectangle {
-            width: 320px; height: 140px; background: #fff;
-            border-radius: 6px; border-color: #ccc; border-width: 1px;
-            drop-shadow-blur: 12px; drop-shadow-color: #30000000;
-            VerticalBox {
-                padding: 16px; spacing: 12px;
+            width: 320px; height: 140px; background: #fff; border-radius: 6px; border-color: #ccc; border-width: 1px; drop-shadow-blur: 12px; drop-shadow-color: #30000000;
+            VerticalBox { padding: 16px; spacing: 12px;
                 Text { text: "Новая папка"; font-size: 14px; font-weight: 700; }
                 fn-in := LineEdit { placeholder-text: "Название"; }
-                HorizontalBox {
-                    spacing: 8px; alignment: end;
+                HorizontalBox { spacing: 8px; alignment: end;
                     Button { text: "Отмена"; clicked => { root.show-folder-dlg = false; } }
                     Button { text: "Создать"; primary: true;
-                        clicked => { if fn-in.text != "" { root.new-folder-confirmed(fn-in.text); root.show-folder-dlg = false; } } }
-                }
-            }
+                        clicked => { if fn-in.text != "" { root.new-folder-confirmed(fn-in.text); root.show-folder-dlg = false; } } } } }
         }
     }
 
-    // New Bookmark
     if root.show-bookmark-dlg: Rectangle {
         background: #88000000;
         TouchArea { clicked => { root.show-bookmark-dlg = false; } }
         Rectangle {
-            width: 400px; height: 185px; background: #fff;
-            border-radius: 6px; border-color: #ccc; border-width: 1px;
-            drop-shadow-blur: 12px; drop-shadow-color: #30000000;
-            VerticalBox {
-                padding: 16px; spacing: 10px;
+            width: 400px; height: 185px; background: #fff; border-radius: 6px; border-color: #ccc; border-width: 1px; drop-shadow-blur: 12px; drop-shadow-color: #30000000;
+            VerticalBox { padding: 16px; spacing: 10px;
                 Text { text: "Новая ссылка"; font-size: 14px; font-weight: 700; }
                 bm-url := LineEdit { placeholder-text: "URL (https://...)"; }
                 bm-ttl := LineEdit { placeholder-text: "Название (необязательно)"; }
-                HorizontalBox {
-                    spacing: 8px; alignment: end;
+                HorizontalBox { spacing: 8px; alignment: end;
                     Button { text: "Отмена"; clicked => { root.show-bookmark-dlg = false; } }
                     Button { text: "Добавить"; primary: true;
-                        clicked => { if bm-url.text != "" { root.new-bookmark-confirmed(bm-ttl.text, bm-url.text); root.show-bookmark-dlg = false; } } }
-                }
-            }
+                        clicked => { if bm-url.text != "" { root.new-bookmark-confirmed(bm-ttl.text, bm-url.text); root.show-bookmark-dlg = false; } } } } }
         }
     }
 
-    // Edit Bookmark (F4)
     if root.show-edit-dlg: Rectangle {
         background: #88000000;
         TouchArea { clicked => { root.show-edit-dlg = false; } }
         Rectangle {
-            width: 440px; height: 250px; background: #fff;
-            border-radius: 6px; border-color: #ccc; border-width: 1px;
-            drop-shadow-blur: 12px; drop-shadow-color: #30000000;
-            VerticalBox {
-                padding: 16px; spacing: 10px;
+            width: 440px; height: 250px; background: #fff; border-radius: 6px; border-color: #ccc; border-width: 1px; drop-shadow-blur: 12px; drop-shadow-color: #30000000;
+            VerticalBox { padding: 16px; spacing: 10px;
                 Text { text: "Свойства ссылки"; font-size: 14px; font-weight: 700; }
                 ed-ttl  := LineEdit { text: root.edit-title-val; placeholder-text: "Название"; }
                 ed-url  := LineEdit { text: root.edit-url-val;   placeholder-text: "URL"; }
-                ed-note := LineEdit { text: root.edit-note-val;  placeholder-text: "Заметка (необязательно)"; }
-                HorizontalBox {
-                    spacing: 8px; alignment: end;
+                ed-note := LineEdit { text: root.edit-note-val;  placeholder-text: "Заметка"; }
+                HorizontalBox { spacing: 8px; alignment: end;
                     Button { text: "Отмена"; clicked => { root.show-edit-dlg = false; } }
                     Button { text: "Сохранить"; primary: true;
-                        clicked => {
-                            root.edit-confirmed(ed-ttl.text, ed-url.text, ed-note.text);
-                            root.show-edit-dlg = false;
-                        }
-                    }
-                }
-            }
+                        clicked => { root.edit-confirmed(ed-ttl.text, ed-url.text, ed-note.text); root.show-edit-dlg = false; } } } }
         }
     }
 
-    // Rename
     if root.show-rename-dlg: Rectangle {
         background: #88000000;
         TouchArea { clicked => { root.show-rename-dlg = false; } }
         Rectangle {
-            width: 340px; height: 140px; background: #fff;
-            border-radius: 6px; border-color: #ccc; border-width: 1px;
-            drop-shadow-blur: 12px; drop-shadow-color: #30000000;
-            VerticalBox {
-                padding: 16px; spacing: 12px;
+            width: 340px; height: 140px; background: #fff; border-radius: 6px; border-color: #ccc; border-width: 1px; drop-shadow-blur: 12px; drop-shadow-color: #30000000;
+            VerticalBox { padding: 16px; spacing: 12px;
                 Text { text: "Переименовать"; font-size: 14px; font-weight: 700; }
                 rn-in := LineEdit { text: root.rename-prefill; placeholder-text: "Новое название"; }
-                HorizontalBox {
-                    spacing: 8px; alignment: end;
+                HorizontalBox { spacing: 8px; alignment: end;
                     Button { text: "Отмена"; clicked => { root.show-rename-dlg = false; } }
                     Button { text: "ОК"; primary: true;
-                        clicked => { if rn-in.text != "" { root.rename-confirmed(rn-in.text); root.show-rename-dlg = false; } } }
-                }
-            }
+                        clicked => { if rn-in.text != "" { root.rename-confirmed(rn-in.text); root.show-rename-dlg = false; } } } } }
         }
     }
 }

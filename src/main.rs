@@ -14,11 +14,21 @@ struct State {
     active_folder: Option<i64>,
     selected_bookmark: Option<i64>,
     search_query: String,
+    sort_by: SortBy,
+    sort_asc: bool,
 }
+
+#[derive(Clone, Copy, PartialEq)]
+enum SortBy { Title, Url }
 
 impl State {
     fn new(db: Database) -> Self {
-        State { db, expanded: HashSet::new(), active_folder: None, selected_bookmark: None, search_query: String::new() }
+        State {
+            db, expanded: HashSet::new(),
+            active_folder: None, selected_bookmark: None,
+            search_query: String::new(),
+            sort_by: SortBy::Title, sort_asc: true,
+        }
     }
 
     fn build_folder_model(&self) -> ModelRc<FolderNode> {
@@ -31,15 +41,16 @@ impl State {
     }
 
     fn walk(all: &[db::DbFolder], children: &std::collections::HashMap<Option<i64>, Vec<usize>>,
-            expanded: &HashSet<i64>, active: Option<i64>, parent: Option<i64>, depth: i32, out: &mut Vec<FolderNode>) {
+            expanded: &HashSet<i64>, active: Option<i64>, parent: Option<i64>, depth: i32,
+            out: &mut Vec<FolderNode>) {
         if let Some(kids) = children.get(&parent) {
             for &i in kids {
                 let f = &all[i];
-                let has_ch = children.contains_key(&Some(f.id));
                 out.push(FolderNode {
                     id: f.id as i32, title: SharedString::from(f.title.as_str()),
                     depth, expanded: expanded.contains(&f.id),
-                    has_children: has_ch, selected: active == Some(f.id),
+                    has_children: children.contains_key(&Some(f.id)),
+                    selected: active == Some(f.id),
                 });
                 if expanded.contains(&f.id) {
                     Self::walk(all, children, expanded, active, Some(f.id), depth + 1, out);
@@ -49,11 +60,24 @@ impl State {
     }
 
     fn build_bookmark_model(&self) -> ModelRc<BookmarkItem> {
-        let bms = if !self.search_query.is_empty() {
+        let mut bms = if !self.search_query.is_empty() {
             self.db.search(&self.search_query).unwrap_or_default()
         } else {
             self.active_folder.map(|id| self.db.get_bookmarks(id).unwrap_or_default()).unwrap_or_default()
         };
+        // Sort
+        match self.sort_by {
+            SortBy::Title => bms.sort_by(|a, b| {
+                let cmp = a.title.to_lowercase().cmp(&b.title.to_lowercase());
+                if self.sort_asc { cmp } else { cmp.reverse() }
+            }),
+            SortBy::Url => bms.sort_by(|a, b| {
+                let au = a.url.as_deref().unwrap_or("").to_lowercase();
+                let bu = b.url.as_deref().unwrap_or("").to_lowercase();
+                let cmp = au.cmp(&bu);
+                if self.sort_asc { cmp } else { cmp.reverse() }
+            }),
+        }
         let vec: Vec<BookmarkItem> = bms.into_iter().map(|b| BookmarkItem {
             id: b.id as i32, title: SharedString::from(b.title.as_str()),
             url: SharedString::from(b.url.as_deref().unwrap_or("")),
@@ -63,17 +87,23 @@ impl State {
         ModelRc::new(VecModel::from(vec))
     }
 
+    fn sort_label(&self) -> SharedString {
+        let arrow = if self.sort_asc { "↑" } else { "↓" };
+        let by = match self.sort_by { SortBy::Title => "Название", SortBy::Url => "URL" };
+        SharedString::from(format!("{by} {arrow}"))
+    }
+
     fn status(&self) -> SharedString {
         if !self.search_query.is_empty() {
             let n = self.db.search(&self.search_query).unwrap_or_default().len();
             return SharedString::from(format!("Поиск: \"{}\"  |  Найдено: {n}", self.search_query));
         }
-        let (folders, bookmarks) = self.db.total_counts();
+        let (folders, bms) = self.db.total_counts();
         match self.active_folder {
             Some(id) => SharedString::from(format!(
-                "Ссылок: {}  |  Всего: папок {folders}, ссылок {bookmarks}  |  Enter=открыть  Del=удалить  F2=переименовать",
+                "Ссылок: {}  |  Всего: папок {folders}, ссылок {bms}  |  ↑↓=выбор  Enter=открыть  Del=удалить  F2=имя  F4=ред.",
                 self.db.bookmark_count(id))),
-            None => SharedString::from(format!("Папок: {folders}  |  Ссылок: {bookmarks}  |  Выберите папку")),
+            None => SharedString::from(format!("Папок: {folders}  |  Ссылок: {bms}  |  Выберите папку")),
         }
     }
 
@@ -82,12 +112,32 @@ impl State {
         if let Some(id) = self.active_folder { return self.db.get_folder_title(id).unwrap_or_default(); }
         String::new()
     }
+
+    fn bookmark_ids_ordered(&self) -> Vec<i64> {
+        let mut bms = self.active_folder
+            .map(|id| self.db.get_bookmarks(id).unwrap_or_default())
+            .unwrap_or_default();
+        match self.sort_by {
+            SortBy::Title => bms.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase())),
+            SortBy::Url => bms.sort_by(|a, b| {
+                a.url.as_deref().unwrap_or("").to_lowercase()
+                    .cmp(&b.url.as_deref().unwrap_or("").to_lowercase())
+            }),
+        }
+        if !self.sort_asc { bms.reverse(); }
+        bms.iter().map(|b| b.id).collect()
+    }
 }
 
 fn refresh_ui(ui: &MainWindow, st: &State) {
     ui.set_folders(st.build_folder_model());
     ui.set_bookmarks(st.build_bookmark_model());
     ui.set_status_text(st.status());
+    ui.set_sort_label(st.sort_label());
+    update_detail(ui, st);
+}
+
+fn update_detail(ui: &MainWindow, st: &State) {
     if let Some(id) = st.selected_bookmark {
         if let Some(bm) = st.db.get_bookmark(id) {
             ui.set_detail_title(SharedString::from(bm.title.as_str()));
@@ -108,6 +158,51 @@ fn open_url(url: &str) {
         .creation_flags(0x0800_0000).spawn();
 }
 
+fn copy_to_clipboard(text: &str) {
+    // Windows clipboard API via extern declarations
+    extern "system" {
+        fn OpenClipboard(hwnd: *mut core::ffi::c_void) -> i32;
+        fn EmptyClipboard() -> i32;
+        fn SetClipboardData(fmt: u32, hmem: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
+        fn CloseClipboard() -> i32;
+        fn GlobalAlloc(flags: u32, size: usize) -> *mut core::ffi::c_void;
+        fn GlobalLock(hmem: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
+        fn GlobalUnlock(hmem: *mut core::ffi::c_void) -> i32;
+    }
+    unsafe {
+        if OpenClipboard(std::ptr::null_mut()) == 0 { return; }
+        EmptyClipboard();
+        let wide: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+        let hmem = GlobalAlloc(0x0042, wide.len() * 2); // GMEM_MOVEABLE
+        if !hmem.is_null() {
+            let ptr = GlobalLock(hmem) as *mut u16;
+            if !ptr.is_null() {
+                std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
+                GlobalUnlock(hmem);
+                SetClipboardData(13, hmem); // CF_UNICODETEXT
+            }
+        }
+        CloseClipboard();
+    }
+}
+
+fn show_ctx_folder(ui: &MainWindow, id: i32) {
+    ui.set_ctx_is_folder(true);
+    ui.set_ctx_id(id);
+    ui.set_show_ctx(true);
+}
+
+fn show_ctx_bookmark(ui: &MainWindow, st: &State, id: i32) {
+    ui.set_ctx_is_folder(false);
+    ui.set_ctx_id(id);
+    ui.set_show_ctx(true);
+    if let Some(bm) = st.db.get_bookmark(id as i64) {
+        ui.set_detail_title(SharedString::from(bm.title.as_str()));
+        ui.set_detail_url(SharedString::from(bm.url.as_deref().unwrap_or("")));
+        ui.set_detail_note(SharedString::from(bm.note.as_deref().unwrap_or("")));
+    }
+}
+
 fn main() {
     let db = Database::open_default().expect("Cannot open database");
     db.init_schema().expect("Cannot init schema");
@@ -116,14 +211,14 @@ fn main() {
     let ui = MainWindow::new().unwrap();
     refresh_ui(&ui, &state.borrow());
 
-    // Folder clicked
+    // ── Navigation ────────────────────────────────────────────────────────────
+
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_folder_clicked(move |id| {
         let ui = w.unwrap(); let mut st = s.borrow_mut();
         st.active_folder = Some(id as i64); st.selected_bookmark = None;
         st.expanded.insert(id as i64); refresh_ui(&ui, &st); }); }
 
-    // Folder toggle
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_folder_toggle(move |id| {
         let ui = w.unwrap(); let mut st = s.borrow_mut();
@@ -131,16 +226,33 @@ fn main() {
         if st.expanded.contains(&fid) { st.expanded.remove(&fid); } else { st.expanded.insert(fid); }
         ui.set_folders(st.build_folder_model()); }); }
 
-    // Bookmark clicked
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_bookmark_clicked(move |id| {
         let ui = w.unwrap(); let mut st = s.borrow_mut();
-        st.selected_bookmark = Some(id as i64); refresh_ui(&ui, &st); }); }
+        st.selected_bookmark = Some(id as i64);
+        ui.set_bookmarks(st.build_bookmark_model()); update_detail(&ui, &st); }); }
 
-    // Open URL
     ui.on_bookmark_open(|url| open_url(url.as_str()));
 
-    // Create folder
+    // Arrow key navigation in bookmark list
+    { let s = state.clone(); let w = ui.as_weak();
+      ui.on_bookmark_nav(move |delta| {
+        let ui = w.unwrap(); let mut st = s.borrow_mut();
+        let ids = st.bookmark_ids_ordered();
+        if ids.is_empty() { return; }
+        let cur_pos = st.selected_bookmark.and_then(|sel| ids.iter().position(|&id| id == sel));
+        let new_pos = match cur_pos {
+            None => 0,
+            Some(p) => {
+                let n = ids.len() as i32;
+                ((p as i32 + delta).rem_euclid(n)) as usize
+            }
+        };
+        st.selected_bookmark = Some(ids[new_pos]);
+        ui.set_bookmarks(st.build_bookmark_model()); update_detail(&ui, &st); }); }
+
+    // ── CRUD ─────────────────────────────────────────────────────────────────
+
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_new_folder_confirmed(move |name| {
         let ui = w.unwrap(); let mut st = s.borrow_mut();
@@ -151,30 +263,22 @@ fn main() {
         }
         refresh_ui(&ui, &st); }); }
 
-    // Create bookmark
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_new_bookmark_confirmed(move |title, url| {
         let ui = w.unwrap(); let mut st = s.borrow_mut();
-        if let Some(fid) = st.active_folder {
-            let _ = st.db.create_bookmark(fid, title.as_str(), url.as_str());
-        } else {
-            // No folder selected — create in root
-            if let Ok(root_id) = st.db.create_folder(None, "Ссылки") {
-                st.expanded.insert(root_id);
-                st.active_folder = Some(root_id);
-                let _ = st.db.create_bookmark(root_id, title.as_str(), url.as_str());
-            }
-        }
+        let fid = st.active_folder.unwrap_or_else(|| {
+            st.db.create_folder(None, "Ссылки").unwrap_or(1)
+        });
+        st.active_folder = Some(fid);
+        let _ = st.db.create_bookmark(fid, title.as_str(), url.as_str());
         refresh_ui(&ui, &st); }); }
 
-    // Rename requested (F2 or button)
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_rename_requested(move || {
         let ui = w.unwrap(); let st = s.borrow();
         ui.set_rename_prefill(SharedString::from(st.selected_name().as_str()));
         ui.set_show_rename_dlg(true); }); }
 
-    // Rename confirmed
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_rename_confirmed(move |new_name| {
         let ui = w.unwrap(); let st = s.borrow();
@@ -182,7 +286,6 @@ fn main() {
         else if let Some(id) = st.active_folder { let _ = st.db.rename_node(id, new_name.as_str()); }
         refresh_ui(&ui, &st); }); }
 
-    // Edit requested (F4)
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_edit_requested(move || {
         let ui = w.unwrap(); let st = s.borrow();
@@ -195,7 +298,6 @@ fn main() {
             }
         } }); }
 
-    // Edit confirmed
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_edit_confirmed(move |title, url, note| {
         let ui = w.unwrap(); let st = s.borrow();
@@ -204,7 +306,6 @@ fn main() {
         }
         refresh_ui(&ui, &st); }); }
 
-    // Delete
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_delete_selected(move || {
         let ui = w.unwrap(); let mut st = s.borrow_mut();
@@ -215,7 +316,124 @@ fn main() {
         }
         refresh_ui(&ui, &st); }); }
 
-    // Search
+    // ── Context menu ─────────────────────────────────────────────────────────
+
+    { let s = state.clone(); let w = ui.as_weak();
+      ui.on_folder_right_click(move |id| {
+        let ui = w.unwrap(); let mut st = s.borrow_mut();
+        st.active_folder = Some(id as i64); st.selected_bookmark = None;
+        ui.set_folders(st.build_folder_model());
+        show_ctx_folder(&ui, id); }); }
+
+    { let s = state.clone(); let w = ui.as_weak();
+      ui.on_bookmark_right_click(move |id| {
+        let ui = w.unwrap(); let mut st = s.borrow_mut();
+        st.selected_bookmark = Some(id as i64);
+        ui.set_bookmarks(st.build_bookmark_model());
+        show_ctx_bookmark(&ui, &st, id); }); }
+
+    // ctx-open (bookmark)
+    { let s = state.clone();
+      ui.on_ctx_open(move |id| {
+        let st = s.borrow();
+        if let Some(bm) = st.db.get_bookmark(id as i64) {
+            open_url(bm.url.as_deref().unwrap_or("")); } }); }
+
+    // ctx-edit
+    { let s = state.clone(); let w = ui.as_weak();
+      ui.on_ctx_edit(move |id| {
+        let ui = w.unwrap(); let mut st = s.borrow_mut();
+        st.selected_bookmark = Some(id as i64);
+        if let Some(bm) = st.db.get_bookmark(id as i64) {
+            ui.set_edit_title_val(SharedString::from(bm.title.as_str()));
+            ui.set_edit_url_val(SharedString::from(bm.url.as_deref().unwrap_or("")));
+            ui.set_edit_note_val(SharedString::from(bm.note.as_deref().unwrap_or("")));
+            ui.set_show_edit_dlg(true);
+        } }); }
+
+    // ctx-rename
+    { let s = state.clone(); let w = ui.as_weak();
+      ui.on_ctx_rename(move |id| {
+        let ui = w.unwrap(); let st = s.borrow();
+        let is_folder = ui.get_ctx_is_folder();
+        let name = if is_folder {
+            st.db.get_folder_title(id as i64).unwrap_or_default()
+        } else {
+            st.db.get_bookmark_title(id as i64).unwrap_or_default()
+        };
+        // Update selection so rename_confirmed works correctly
+        if is_folder {
+            drop(st); let mut st2 = s.borrow_mut();
+            st2.active_folder = Some(id as i64); st2.selected_bookmark = None;
+        } else {
+            drop(st); let mut st2 = s.borrow_mut();
+            st2.selected_bookmark = Some(id as i64);
+        }
+        ui.set_rename_prefill(SharedString::from(name.as_str()));
+        ui.set_show_rename_dlg(true); }); }
+
+
+    // ctx-delete
+    { let s = state.clone(); let w = ui.as_weak();
+      ui.on_ctx_delete(move |id| {
+        let ui = w.unwrap();
+        let is_folder = ui.get_ctx_is_folder();
+        let mut st = s.borrow_mut();
+        if is_folder {
+            let _ = st.db.delete_folder(id as i64);
+            st.expanded.remove(&(id as i64));
+            if st.active_folder == Some(id as i64) { st.active_folder = None; }
+        } else {
+            let _ = st.db.delete_bookmark(id as i64);
+            if st.selected_bookmark == Some(id as i64) { st.selected_bookmark = None; }
+        }
+        refresh_ui(&ui, &st); }); }
+
+    // ctx-new-sub (new subfolder in folder)
+    { let s = state.clone(); let w = ui.as_weak();
+      ui.on_ctx_new_sub(move |parent_id| {
+        let ui = w.unwrap(); let mut st = s.borrow_mut();
+        if let Ok(new_id) = st.db.create_folder(Some(parent_id as i64), "Новая папка") {
+            st.expanded.insert(parent_id as i64);
+            st.active_folder = Some(new_id);
+            st.expanded.insert(new_id);
+        }
+        refresh_ui(&ui, &st); }); }
+
+    // ctx-new-bm-in (new bookmark in folder)
+    { let s = state.clone(); let w = ui.as_weak();
+      ui.on_ctx_new_bm_in(move |parent_id| {
+        let ui = w.unwrap(); let mut st = s.borrow_mut();
+        st.active_folder = Some(parent_id as i64);
+        st.expanded.insert(parent_id as i64);
+        refresh_ui(&ui, &st);
+        ui.set_show_bookmark_dlg(true); }); }
+
+    // ctx-copy-url
+    { let s = state.clone();
+      ui.on_ctx_copy_url(move |id| {
+        let st = s.borrow();
+        if let Some(bm) = st.db.get_bookmark(id as i64) {
+            copy_to_clipboard(bm.url.as_deref().unwrap_or(""));
+        } }); }
+
+    // ── Sort ─────────────────────────────────────────────────────────────────
+
+    { let s = state.clone(); let w = ui.as_weak();
+      ui.on_sort_toggle(move || {
+        let ui = w.unwrap(); let mut st = s.borrow_mut();
+        // Cycle: title asc → title desc → url asc → url desc → title asc
+        match (st.sort_by, st.sort_asc) {
+            (SortBy::Title, true)  => { st.sort_asc = false; }
+            (SortBy::Title, false) => { st.sort_by = SortBy::Url; st.sort_asc = true; }
+            (SortBy::Url, true)    => { st.sort_asc = false; }
+            (SortBy::Url, false)   => { st.sort_by = SortBy::Title; st.sort_asc = true; }
+        }
+        ui.set_sort_label(st.sort_label());
+        ui.set_bookmarks(st.build_bookmark_model()); }); }
+
+    // ── Search ────────────────────────────────────────────────────────────────
+
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_search_changed(move |query| {
         let ui = w.unwrap(); let mut st = s.borrow_mut();
@@ -223,7 +441,8 @@ fn main() {
         ui.set_detail_url(SharedString::default());
         ui.set_bookmarks(st.build_bookmark_model()); ui.set_status_text(st.status()); }); }
 
-    // Open DB
+    // ── DB operations ─────────────────────────────────────────────────────────
+
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_open_db(move || {
         let ui = w.unwrap();
@@ -240,7 +459,6 @@ fn main() {
             }
         } }); }
 
-    // New DB
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_new_db(move || {
         let ui = w.unwrap();
@@ -258,7 +476,8 @@ fn main() {
             }
         } }); }
 
-    // Export HTML
+    // ── Import / Export ───────────────────────────────────────────────────────
+
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_export_html(move || {
         let ui = w.unwrap(); let st = s.borrow();
@@ -269,7 +488,6 @@ fn main() {
             }
         } }); }
 
-    // Export TXT
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_export_txt(move || {
         let ui = w.unwrap(); let st = s.borrow();
@@ -280,7 +498,6 @@ fn main() {
             }
         } }); }
 
-    // Import ua.dat
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_import_uadat(move || {
         let ui = w.unwrap();
@@ -292,7 +509,6 @@ fn main() {
             }
         } }); }
 
-    // Import HTML
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_import_html(move || {
         let ui = w.unwrap();

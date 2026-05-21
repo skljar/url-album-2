@@ -224,6 +224,13 @@ impl State {
         }
     }
 
+    fn breadcrumb(&self) -> SharedString {
+        match self.active_folder {
+            Some(id) => SharedString::from(self.db.get_breadcrumb(id).unwrap_or_default().as_str()),
+            None => SharedString::default(),
+        }
+    }
+
     fn selected_name(&self) -> String {
         if let Some(id) = self.selected_bookmark { return self.db.get_bookmark_title(id).unwrap_or_default(); }
         if let Some(id) = self.active_folder { return self.db.get_folder_title(id).unwrap_or_default(); }
@@ -305,6 +312,7 @@ fn refresh_ui(ui: &MainWindow, st: &State) {
     ui.set_bookmarks(st.build_bookmark_model());
     ui.set_status_text(st.status());
     ui.set_sort_label(st.sort_label());
+    ui.set_breadcrumb(st.breadcrumb());
     update_detail(ui, st);
 }
 
@@ -437,12 +445,12 @@ fn main() {
 
     // ── Tree navigation ───────────────────────────────────────────────────
 
-    // Folder clicked → select folder, list mode
+    // Folder clicked → select + show contents (WITHOUT changing expanded state)
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_tree_folder_clicked(move |id| {
         let ui = w.unwrap(); let mut st = s.lock().unwrap();
         st.active_folder = Some(id as i64); st.selected_bookmark = None;
-        st.expanded.insert(id as i64); st.save_settings();
+        st.save_settings();  // do NOT auto-expand - that's [+]/[-] button's job
         refresh_ui(&ui, &st); }); }
 
     // Folder toggled (double-click or [+]/[-])
@@ -514,11 +522,25 @@ fn main() {
         refresh_ui(&ui, &st); }); }
 
     { let s = state.clone(); let w = ui.as_weak();
-      ui.on_new_bookmark_confirmed(move |title, url| {
+      ui.on_new_bookmark_confirmed(move |title, url, note| {
         let ui = w.unwrap(); let mut st = s.lock().unwrap();
+        // Check for duplicate URL
+        let url_str = url.as_str();
+        if !url_str.is_empty() {
+            if let Ok(existing) = st.db.search(url_str) {
+                if existing.iter().any(|b| b.url.as_deref() == Some(url_str)) {
+                    ui.set_status_text(SharedString::from(
+                        format!("Дублирующийся URL: {url_str}")));
+                }
+            }
+        }
         let fid = st.active_folder.unwrap_or_else(|| st.db.create_folder(None, "Ссылки").unwrap_or(1));
         st.active_folder = Some(fid);
-        if let Ok(new_id) = st.db.create_bookmark(fid, title.as_str(), url.as_str()) {
+        if let Ok(new_id) = st.db.create_bookmark(fid, title.as_str(), url_str) {
+            // Save note if provided
+            if !note.as_str().is_empty() {
+                let _ = st.db.update_bookmark(new_id, title.as_str(), url_str, note.as_str());
+            }
             st.selected_bookmark = Some(new_id);
         }
         refresh_ui(&ui, &st); }); }
@@ -558,6 +580,21 @@ fn main() {
 
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_delete_selected(move || {
+        let ui = w.unwrap(); let st = s.lock().unwrap();
+        // Show confirm dialog
+        let text = if let Some(id) = st.selected_bookmark {
+            st.db.get_bookmark_title(id).map(|t| format!("Удалить ссылку «{t}»?"))
+                .unwrap_or_else(|| "Удалить ссылку?".to_string())
+        } else if let Some(id) = st.active_folder {
+            st.db.get_folder_title(id).map(|t| format!("Удалить папку «{t}» и всё содержимое?"))
+                .unwrap_or_else(|| "Удалить папку?".to_string())
+        } else { return; };
+        ui.set_confirm_delete_text(SharedString::from(text.as_str()));
+        ui.set_show_confirm_delete(true); }); }
+
+    // Actually perform delete after confirmation
+    { let s = state.clone(); let w = ui.as_weak();
+      ui.on_confirm_delete_yes(move || {
         let ui = w.unwrap(); let mut st = s.lock().unwrap();
         if let Some(id) = st.selected_bookmark {
             let _ = st.db.delete_bookmark(id); st.selected_bookmark = None;
@@ -667,6 +704,9 @@ fn main() {
         let bms = { let st = s.lock().unwrap(); st.db.get_bookmarks(folder_id as i64).unwrap_or_default() };
         let favicons_dir = { s.lock().unwrap().favicons_dir() };
         let total = bms.len(); if total == 0 { return; }
+        ui.set_show_favicon_progress(true);
+        ui.set_favicon_progress_text(SharedString::from(format!("Favicon: 0 / {total}")));
+        ui.set_favicon_progress_value(0.0);
         let s2 = s.clone(); let w2 = w.clone();
         std::thread::spawn(move || {
             for (i, bm) in bms.into_iter().enumerate() {
@@ -675,15 +715,24 @@ fn main() {
                         let _ = s2.lock().unwrap().db.set_favicon(bm.id, &fname);
                     }
                 }
-                let done = i + 1; let s3 = s2.clone(); let w3 = w2.clone();
+                let done = i + 1;
+                let progress = done as f32 / total as f32;
+                let s3 = s2.clone(); let w3 = w2.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     let ui = w3.unwrap();
-                    if done == total { let st = s3.lock().unwrap(); ui.set_tree_nodes(st.build_tree_model()); ui.set_bookmarks(st.build_bookmark_model()); ui.set_status_text(st.status()); }
-                    else { ui.set_status_text(SharedString::from(format!("Favicon: {done}/{total}..."))); }
+                    ui.set_favicon_progress_text(SharedString::from(format!("Favicon: {done} / {total}")));
+                    ui.set_favicon_progress_value(progress);
+                    if done == total {
+                        let st = s3.lock().unwrap();
+                        ui.set_tree_nodes(st.build_tree_model());
+                        ui.set_right_items(st.build_right_panel_model());
+                        ui.set_bookmarks(st.build_bookmark_model());
+                        ui.set_status_text(st.status());
+                        ui.set_show_favicon_progress(false);
+                    }
                 });
             }
         });
-        ui.set_status_text(SharedString::from(format!("Загрузка favicon для {total} ссылок...")));
     }); }
 
     // ── Sort / Search ─────────────────────────────────────────────────────────
@@ -816,7 +865,11 @@ fn main() {
         let ui = w.unwrap();
         let (bms, favicons_dir) = { let st = s.lock().unwrap();
             (st.active_folder.map(|id| st.db.get_bookmarks(id).unwrap_or_default()).unwrap_or_default(), st.favicons_dir()) };
-        let total = bms.len(); if total == 0 { ui.set_status_text(SharedString::from("Нет ссылок")); return; }
+        let total = bms.len();
+        if total == 0 { ui.set_status_text(SharedString::from("Нет ссылок для загрузки favicon")); return; }
+        ui.set_show_favicon_progress(true);
+        ui.set_favicon_progress_text(SharedString::from(format!("Favicon: 0 / {total}")));
+        ui.set_favicon_progress_value(0.0);
         let s2 = s.clone(); let w2 = w.clone();
         std::thread::spawn(move || {
             for (i, bm) in bms.into_iter().enumerate() {
@@ -825,15 +878,24 @@ fn main() {
                         let _ = s2.lock().unwrap().db.set_favicon(bm.id, &fname);
                     }
                 }
-                let done = i + 1; let s3 = s2.clone(); let w3 = w2.clone();
+                let done = i + 1;
+                let progress = done as f32 / total as f32;
+                let s3 = s2.clone(); let w3 = w2.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     let ui = w3.unwrap();
-                    if done == total { let st = s3.lock().unwrap(); ui.set_tree_nodes(st.build_tree_model()); ui.set_bookmarks(st.build_bookmark_model()); ui.set_status_text(st.status()); }
-                    else { ui.set_status_text(SharedString::from(format!("Favicon: {done}/{total}..."))); }
+                    ui.set_favicon_progress_text(SharedString::from(format!("Favicon: {done} / {total}")));
+                    ui.set_favicon_progress_value(progress);
+                    if done == total {
+                        let st = s3.lock().unwrap();
+                        ui.set_tree_nodes(st.build_tree_model());
+                        ui.set_right_items(st.build_right_panel_model());
+                        ui.set_bookmarks(st.build_bookmark_model());
+                        ui.set_status_text(st.status());
+                        ui.set_show_favicon_progress(false);
+                    }
                 });
             }
         });
-        ui.set_status_text(SharedString::from(format!("Загрузка favicon для {total} ссылок...")));
     }); }
 
     // ── Check links ───────────────────────────────────────────────────────────
@@ -898,6 +960,21 @@ fn main() {
     { let s = state.clone();
       ui.on_tree_width_changed(move |w| {
         let mut st = s.lock().unwrap(); st.tree_width = w as f32; st.save_settings(); }); }
+
+    // Expand all folders
+    { let s = state.clone(); let w = ui.as_weak();
+      ui.on_expand_all(move || {
+        let ui = w.unwrap(); let mut st = s.lock().unwrap();
+        let all = st.db.get_all_folders().unwrap_or_default();
+        for f in &all { st.expanded.insert(f.id); }
+        st.save_settings(); ui.set_tree_nodes(st.build_tree_model()); }); }
+
+    // Collapse all folders
+    { let s = state.clone(); let w = ui.as_weak();
+      ui.on_collapse_all(move || {
+        let ui = w.unwrap(); let mut st = s.lock().unwrap();
+        st.expanded.clear(); st.save_settings();
+        ui.set_tree_nodes(st.build_tree_model()); }); }
 
     ui.on_focus_search(|| {});
 

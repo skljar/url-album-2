@@ -76,9 +76,10 @@ export component MainWindow inherits Window {
 
     // Data
     in property <[TreeNode]>    tree-nodes;
-    in property <[RightItem]>   right-items;   // right panel: subfolders + bookmarks
-    in property <[BookmarkItem]> bookmarks;     // search results / all bookmarks
+    in property <[RightItem]>   right-items;
+    in property <[BookmarkItem]> bookmarks;
     in property <string> status-text: "Готов";
+    in property <string> breadcrumb: "";
     in property <string> detail-title: "";
     in property <string> detail-url: "";
     in property <string> detail-note: "";
@@ -86,7 +87,12 @@ export component MainWindow inherits Window {
     in property <bool>   detail-has-favicon: false;
     in property <string> sort-label: "Название ↑";
     in property <string> db-name: "album.db";
-    in property <int>    active-bookmark: 0;  // 0=list mode, >0=detail mode
+    in property <int>    active-bookmark: 0;
+
+    // Favicon progress panel
+    in property <bool>   show-favicon-progress: false;
+    in property <string> favicon-progress-text: "";
+    in property <float>  favicon-progress-value: 0.0;
 
     // Dialogs
     in-out property <bool>   show-folder-dlg: false;
@@ -94,6 +100,8 @@ export component MainWindow inherits Window {
     in-out property <bool>   show-rename-dlg: false;
     in-out property <bool>   show-edit-dlg: false;
     in-out property <bool>   show-move-dlg: false;
+    in-out property <bool>   show-confirm-delete: false;
+    in-out property <string> confirm-delete-text: "";
     in-out property <string> rename-prefill: "";
     in-out property <string> edit-title-val: "";
     in-out property <string> edit-url-val: "";
@@ -122,7 +130,9 @@ export component MainWindow inherits Window {
     callback back-to-list();
 
     callback new-folder-confirmed(string);
-    callback new-bookmark-confirmed(string, string);
+    callback new-bookmark-confirmed(string, string, string);  // title, url, note
+    callback confirm-delete-yes();
+    callback expand-all(); callback collapse-all();
     callback rename-requested();
     callback rename-confirmed(string);
     callback edit-requested();
@@ -211,14 +221,16 @@ export component MainWindow inherits Window {
                                 background: node.selected ? #0078d4 : transparent;
                                 border-radius: 2px;
 
-                                // Единый TouchArea для всех событий
+                                // Клик = выбрать (без раскрытия)
+                                // Двойной клик = toggle expand (только папки)
+                                // Правый клик = контекстное меню
                                 TouchArea {
                                     clicked => {
                                         if node.kind == 0 { root.tree-folder-clicked(node.id); }
                                         else { root.tree-bookmark-clicked(node.id); }
                                     }
                                     double-clicked => {
-                                        if node.kind == 0 { root.tree-folder-clicked(node.id); }
+                                        if node.kind == 0 { root.tree-folder-toggled(node.id); }
                                         else { root.bookmark-open(node.url); }
                                     }
                                     pointer-event(e) => {
@@ -305,6 +317,15 @@ export component MainWindow inherits Window {
                     // ── LIST mode: subfolders + bookmarks ─────────────────
                     if root.active-bookmark == 0: VerticalBox {
                         padding: 0px; spacing: 0px;
+
+                        // Breadcrumb
+                        if root.breadcrumb != "": Rectangle {
+                            height: 20px; background: #fffce8; border-color: #e8e0a0; border-width: 1px;
+                            HorizontalBox {
+                                padding-left: 8px;
+                                Text { text: root.breadcrumb; font-size: 11px; color: #666; vertical-alignment: center; }
+                            }
+                        }
 
                         Rectangle {
                             height: 22px; background: #f0f0f0; border-color: #ddd; border-width: 1px;
@@ -560,11 +581,14 @@ export component MainWindow inherits Window {
     }
 
     if root.active-menu == "view": Rectangle {
-        x: 232px; y: 46px; width: 200px; background: white; border-color: #aaa; border-width: 1px; drop-shadow-blur: 6px; drop-shadow-color: #20000000;
+        x: 232px; y: 46px; width: 210px; background: white; border-color: #aaa; border-width: 1px; drop-shadow-blur: 6px; drop-shadow-color: #20000000;
         VerticalBox { padding: 2px; spacing: 0px;
+            MenuItem { text: "Развернуть все папки";  clicked => { root.active-menu=""; root.expand-all(); } }
+            MenuItem { text: "Свернуть все папки";    clicked => { root.active-menu=""; root.collapse-all(); } }
+            MenuItem { separator: true; }
             MenuItem { text: "Все ссылки"; clicked => { root.active-menu=""; root.show-all(); } }
         }
-        height: 1 * 22px + 4px;
+        height: 3 * 22px + 1 * 5px + 4px;
     }
 
     // ══ Context menu ══════════════════════════════════════════════════════════
@@ -608,14 +632,16 @@ export component MainWindow inherits Window {
 
     if root.show-bookmark-dlg: Rectangle {
         background: #88000000; TouchArea { clicked => { root.show-bookmark-dlg = false; } }
-        Rectangle { width: 400px; height: 185px; background: white; border-radius: 5px; border-color: #aaa; border-width: 1px; drop-shadow-blur: 10px; drop-shadow-color: #30000000;
+        Rectangle { width: 420px; height: 220px; background: white; border-radius: 5px; border-color: #aaa; border-width: 1px; drop-shadow-blur: 10px; drop-shadow-color: #30000000;
             VerticalBox { padding: 16px; spacing: 10px;
                 Text { text: "Новая ссылка"; font-size: 14px; font-weight: 700; }
-                bm-url := LineEdit { placeholder-text: "URL (https://...)"; }
-                bm-ttl := LineEdit { placeholder-text: "Название (необязательно)"; }
+                bm-url  := LineEdit { placeholder-text: "URL (https://...)"; }
+                bm-ttl  := LineEdit { placeholder-text: "Название (необязательно)"; }
+                bm-note := LineEdit { placeholder-text: "Заметка (необязательно)"; }
                 HorizontalBox { spacing: 8px; alignment: end;
                     Button { text: "Отмена"; clicked => { root.show-bookmark-dlg = false; } }
-                    Button { text: "Добавить"; primary: true; clicked => { if bm-url.text != "" { root.new-bookmark-confirmed(bm-ttl.text, bm-url.text); root.show-bookmark-dlg = false; } } } } } }
+                    Button { text: "Добавить"; primary: true;
+                        clicked => { if bm-url.text != "" { root.new-bookmark-confirmed(bm-ttl.text, bm-url.text, bm-note.text); root.show-bookmark-dlg = false; } } } } } }
     }
 
     if root.show-edit-dlg: Rectangle {
@@ -664,6 +690,63 @@ export component MainWindow inherits Window {
                     }
                 }
                 HorizontalBox { alignment: end; Button { text: "Отмена"; clicked => { root.show-move-dlg = false; } } }
+            }
+        }
+    }
+
+    // ── Confirm delete dialog ──────────────────────────────────────────────
+    if root.show-confirm-delete: Rectangle {
+        background: #88000000;
+        Rectangle {
+            width: 360px; height: 140px; background: white; border-radius: 5px;
+            border-color: #aaa; border-width: 1px; drop-shadow-blur: 10px; drop-shadow-color: #30000000;
+            VerticalBox { padding: 16px; spacing: 12px;
+                Text { text: "Подтверждение удаления"; font-size: 14px; font-weight: 700; }
+                Text { text: root.confirm-delete-text; font-size: 13px; color: #333; wrap: word-wrap; }
+                HorizontalBox { spacing: 8px; alignment: end;
+                    Button { text: "Отмена"; clicked => { root.show-confirm-delete = false; } }
+                    Button { text: "Удалить"; primary: true;
+                        clicked => { root.show-confirm-delete = false; root.confirm-delete-yes(); } }
+                }
+            }
+        }
+    }
+
+    // ── Favicon progress panel (non-modal, bottom-left) ───────────────────
+    if root.show-favicon-progress: Rectangle {
+        x: 16px;
+        y: root.height - 76px;
+        width: 290px; height: 60px;
+        background: #f5f5f5;
+        border-color: #aaa; border-width: 1px; border-radius: 4px;
+        drop-shadow-blur: 8px; drop-shadow-color: #30000000;
+
+        VerticalBox {
+            padding: 8px; spacing: 6px;
+
+            HorizontalBox {
+                spacing: 8px;
+                Text {
+                    text: root.favicon-progress-text;
+                    font-size: 12px; color: #333;
+                    vertical-alignment: center; horizontal-stretch: 1;
+                }
+                Rectangle {
+                    width: 16px; height: 16px; border-radius: 8px;
+                    background: #0078d4;
+                    Text { text: "×"; color: white; font-size: 11px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                    TouchArea { clicked => { /* cancel would need callback */ } }
+                }
+            }
+
+            // Progress bar
+            Rectangle {
+                height: 6px; background: #e0e0e0; border-radius: 3px;
+                Rectangle {
+                    x: 0; y: 0; height: 6px; border-radius: 3px;
+                    background: #0078d4;
+                    width: root.favicon-progress-value * parent.width;
+                }
             }
         }
     }

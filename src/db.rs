@@ -1,5 +1,5 @@
 use rusqlite::{Connection, Result, params};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct DbFolder {
     pub id: i64,
@@ -11,6 +11,7 @@ pub struct DbBookmark {
     pub id: i64,
     pub title: String,
     pub url: Option<String>,
+    pub note: Option<String>,
 }
 
 pub struct Database {
@@ -20,25 +21,17 @@ pub struct Database {
 impl Database {
     pub fn open_at(path: &PathBuf) -> Result<Self> {
         let conn = Connection::open(path)?;
-        conn.execute_batch("
-            PRAGMA journal_mode=WAL;
-            PRAGMA synchronous=NORMAL;
-            PRAGMA foreign_keys=ON;
-        ")?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
         Ok(Database { conn })
     }
 
     pub fn open_default() -> Result<Self> {
-        let path = Self::default_path();
-        Self::open_at(&path)
+        Self::open_at(&Self::default_path())
     }
 
     pub fn default_path() -> PathBuf {
-        std::env::current_exe()
-            .unwrap_or_default()
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join("album.db")
+        std::env::current_exe().unwrap_or_default()
+            .parent().unwrap_or(Path::new(".")).join("album.db")
     }
 
     pub fn init_schema(&self) -> Result<()> {
@@ -53,29 +46,24 @@ impl Database {
                 sort_idx INTEGER DEFAULT 0,
                 created  TEXT DEFAULT (datetime('now'))
             );
-        ")?;
-        Ok(())
+        ")
     }
 
-    // ── Folders ─────────────────────────────────────────────────────────────
+    // ── Folders ──────────────────────────────────────────────────────────────
 
     pub fn get_all_folders(&self) -> Result<Vec<DbFolder>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, parent, title FROM nodes WHERE kind='folder' ORDER BY parent, sort_idx, title"
-        )?;
-        let rows = stmt.query_map([], |r| Ok(DbFolder {
-            id: r.get(0)?,
-            parent_id: r.get(1)?,
-            title: r.get(2)?,
-        }))?;
-        rows.collect()
+            "SELECT id, parent, title FROM nodes WHERE kind='folder' ORDER BY parent, sort_idx, title")?;
+        let mut result = Vec::new();
+        for row in stmt.query_map([], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,Option<i64>>(1)?, r.get::<_,String>(2)?)))? {
+            let (id, parent_id, title) = row?;
+            result.push(DbFolder { id, parent_id, title });
+        }
+        Ok(result)
     }
 
     pub fn create_folder(&self, parent_id: Option<i64>, title: &str) -> Result<i64> {
-        self.conn.execute(
-            "INSERT INTO nodes (parent, kind, title) VALUES (?1, 'folder', ?2)",
-            params![parent_id, title],
-        )?;
+        self.conn.execute("INSERT INTO nodes (parent,kind,title) VALUES (?1,'folder',?2)", params![parent_id, title])?;
         Ok(self.conn.last_insert_rowid())
     }
 
@@ -85,52 +73,52 @@ impl Database {
     }
 
     pub fn delete_folder(&self, id: i64) -> Result<()> {
-        // Recursive delete via CTE
         self.conn.execute_batch(&format!("
             WITH RECURSIVE sub(id) AS (
-                SELECT {id}
-                UNION ALL
-                SELECT n.id FROM nodes n JOIN sub s ON n.parent=s.id
-            )
-            DELETE FROM nodes WHERE id IN (SELECT id FROM sub);
-        "))?;
-        Ok(())
+                SELECT {id} UNION ALL SELECT n.id FROM nodes n JOIN sub s ON n.parent=s.id
+            ) DELETE FROM nodes WHERE id IN (SELECT id FROM sub);
+        "))
     }
 
-    pub fn has_children(&self, id: i64) -> bool {
-        self.conn
-            .query_row("SELECT COUNT(*) FROM nodes WHERE parent=?1 AND kind='folder'", params![id], |r| r.get::<_, i64>(0))
-            .unwrap_or(0) > 0
+    pub fn get_folder_title(&self, id: i64) -> Option<String> {
+        self.conn.query_row("SELECT title FROM nodes WHERE id=?1", params![id], |r| r.get(0)).ok()
     }
 
-    // ── Bookmarks ────────────────────────────────────────────────────────────
+    // ── Bookmarks ─────────────────────────────────────────────────────────────
 
     pub fn get_bookmarks(&self, folder_id: i64) -> Result<Vec<DbBookmark>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, url FROM nodes WHERE parent=?1 AND kind='bookmark' ORDER BY sort_idx, title"
-        )?;
-        let rows = stmt.query_map(params![folder_id], |r| Ok(DbBookmark {
-            id: r.get(0)?,
-            title: r.get(1)?,
-            url: r.get(2)?,
-        }))?;
-        rows.collect()
+            "SELECT id,title,url,note FROM nodes WHERE parent=?1 AND kind='bookmark' ORDER BY sort_idx,title")?;
+        let mut result = Vec::new();
+        for row in stmt.query_map(params![folder_id], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,String>(1)?, r.get::<_,Option<String>>(2)?, r.get::<_,Option<String>>(3)?)))? {
+            let (id, title, url, note) = row?;
+            result.push(DbBookmark { id, title, url, note });
+        }
+        Ok(result)
+    }
+
+    pub fn get_bookmark(&self, id: i64) -> Option<DbBookmark> {
+        self.conn.query_row(
+            "SELECT id,title,url,note FROM nodes WHERE id=?1",
+            params![id], |r| Ok(DbBookmark {
+                id: r.get(0)?, title: r.get(1)?, url: r.get(2)?, note: r.get(3)?
+            })).ok()
+    }
+
+    pub fn get_bookmark_title(&self, id: i64) -> Option<String> {
+        self.conn.query_row("SELECT title FROM nodes WHERE id=?1", params![id], |r| r.get(0)).ok()
     }
 
     pub fn create_bookmark(&self, parent_id: i64, title: &str, url: &str) -> Result<i64> {
         let t = if title.is_empty() { url } else { title };
-        self.conn.execute(
-            "INSERT INTO nodes (parent, kind, title, url) VALUES (?1, 'bookmark', ?2, ?3)",
-            params![parent_id, t, url],
-        )?;
+        self.conn.execute("INSERT INTO nodes (parent,kind,title,url) VALUES (?1,'bookmark',?2,?3)", params![parent_id, t, url])?;
         Ok(self.conn.last_insert_rowid())
     }
 
-    pub fn update_bookmark(&self, id: i64, title: &str, url: &str) -> Result<()> {
+    pub fn update_bookmark(&self, id: i64, title: &str, url: &str, note: &str) -> Result<()> {
         self.conn.execute(
-            "UPDATE nodes SET title=?1, url=?2 WHERE id=?3",
-            params![title, url, id],
-        )?;
+            "UPDATE nodes SET title=?1, url=?2, note=?3 WHERE id=?4",
+            params![title, url, if note.is_empty() { None } else { Some(note) }, id])?;
         Ok(())
     }
 
@@ -139,92 +127,166 @@ impl Database {
         Ok(())
     }
 
-    pub fn get_node_kind(&self, id: i64) -> Option<String> {
-        self.conn
-            .query_row("SELECT kind FROM nodes WHERE id=?1", params![id], |r| r.get(0))
-            .ok()
-    }
-
     pub fn bookmark_count(&self, folder_id: i64) -> i64 {
-        self.conn
-            .query_row("SELECT COUNT(*) FROM nodes WHERE parent=?1 AND kind='bookmark'", params![folder_id], |r| r.get(0))
-            .unwrap_or(0)
+        self.conn.query_row("SELECT COUNT(*) FROM nodes WHERE parent=?1 AND kind='bookmark'", params![folder_id], |r| r.get(0)).unwrap_or(0)
     }
 
     pub fn total_counts(&self) -> (i64, i64) {
-        let folders = self.conn
-            .query_row("SELECT COUNT(*) FROM nodes WHERE kind='folder'", [], |r| r.get(0))
-            .unwrap_or(0);
-        let bookmarks = self.conn
-            .query_row("SELECT COUNT(*) FROM nodes WHERE kind='bookmark'", [], |r| r.get(0))
-            .unwrap_or(0);
-        (folders, bookmarks)
+        let f = self.conn.query_row("SELECT COUNT(*) FROM nodes WHERE kind='folder'", [], |r| r.get(0)).unwrap_or(0);
+        let b = self.conn.query_row("SELECT COUNT(*) FROM nodes WHERE kind='bookmark'", [], |r| r.get(0)).unwrap_or(0);
+        (f, b)
     }
 
-    // ── Search ───────────────────────────────────────────────────────────────
+    // ── Search ────────────────────────────────────────────────────────────────
 
     pub fn search(&self, query: &str) -> Result<Vec<DbBookmark>> {
         let q = format!("%{}%", query.to_lowercase());
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, url FROM nodes WHERE kind='bookmark'
-             AND (LOWER(title) LIKE ?1 OR LOWER(url) LIKE ?1)
-             ORDER BY title"
-        )?;
-        let rows = stmt.query_map(params![q], |r| Ok(DbBookmark {
-            id: r.get(0)?,
-            title: r.get(1)?,
-            url: r.get(2)?,
-        }))?;
-        rows.collect()
+            "SELECT id,title,url,note FROM nodes WHERE kind='bookmark'
+             AND (LOWER(title) LIKE ?1 OR LOWER(COALESCE(url,'')) LIKE ?1 OR LOWER(COALESCE(note,'')) LIKE ?1)
+             ORDER BY title")?;
+        let mut result = Vec::new();
+        for row in stmt.query_map(params![q], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,String>(1)?, r.get::<_,Option<String>>(2)?, r.get::<_,Option<String>>(3)?)))? {
+            let (id, title, url, note) = row?;
+            result.push(DbBookmark { id, title, url, note });
+        }
+        Ok(result)
     }
 
-    // ── Import from ua.dat ───────────────────────────────────────────────────
+    // ── Export ────────────────────────────────────────────────────────────────
 
-    pub fn import_uadat(&self, path: &std::path::Path) -> Result<usize> {
-        use std::io::BufRead;
+    pub fn export_html(&self, path: &PathBuf) -> Result<usize> {
+        struct Row { kind: String, title: String, url: Option<String>, depth: i64 }
 
-        let file = std::fs::File::open(path).map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
+        let mut stmt = self.conn.prepare("
+            WITH RECURSIVE tree(id, parent, kind, title, url, depth) AS (
+                SELECT id,parent,kind,title,url,0 FROM nodes WHERE parent IS NULL OR parent=0
+                UNION ALL SELECT n.id,n.parent,n.kind,n.title,n.url,t.depth+1 FROM nodes n JOIN tree t ON n.parent=t.id
+            ) SELECT kind,title,url,depth FROM tree ORDER BY depth,title
+        ")?;
 
-        // ua.dat is Windows-1251 encoded
-        let bytes = std::fs::read(path).unwrap_or_default();
-        let (text, _, _) = encoding_rs::WINDOWS_1251.decode(&bytes);
+        let mut rows = Vec::new();
+        for r in stmt.query_map([], |r| Ok(Row { kind: r.get(0)?, title: r.get(1)?, url: r.get(2)?, depth: r.get(3)? }))? {
+            rows.push(r?);
+        }
 
+        let mut html = String::from("<!DOCTYPE NETSCAPE-Bookmark-file-1>\n<META HTTP-EQUIV=\"Content-Type\" CONTENT=\"text/html; charset=UTF-8\">\n<TITLE>Bookmarks</TITLE>\n<H1>Bookmarks</H1>\n<DL><p>\n");
         let mut count = 0;
-        let mut folder_stack: Vec<i64> = vec![]; // root = no parent
-        let mut current_parent: Option<i64> = None;
+        for row in &rows {
+            let ind = "    ".repeat(row.depth as usize);
+            if row.kind == "folder" {
+                html.push_str(&format!("{ind}<DT><H3>{}</H3>\n{ind}<DL><p>\n", esc(&row.title)));
+            } else if let Some(u) = &row.url {
+                html.push_str(&format!("{ind}<DT><A HREF=\"{u}\">{}</A>\n", esc(&row.title)));
+                count += 1;
+            }
+        }
+        html.push_str("</DL><p>\n");
+        std::fs::write(path, html.as_bytes()).map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
+        Ok(count)
+    }
 
+    pub fn export_txt(&self, path: &PathBuf) -> Result<usize> {
+        let mut stmt = self.conn.prepare("SELECT title,url FROM nodes WHERE kind='bookmark' ORDER BY title")?;
+        let mut lines = Vec::new();
+        for r in stmt.query_map([], |r| Ok((r.get::<_,String>(0)?, r.get::<_,Option<String>>(1)?)))? {
+            let (title, url) = r?;
+            if let Some(u) = url { lines.push(format!("{u}\t{title}\n")); }
+        }
+        let count = lines.len();
+        std::fs::write(path, lines.concat().as_bytes()).map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
+        Ok(count)
+    }
+
+    // ── Import ua.dat ─────────────────────────────────────────────────────────
+
+    pub fn import_uadat(&self, path: &Path) -> Result<usize> {
+        let bytes = std::fs::read(path).map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
+        let (text, _, _) = encoding_rs::WINDOWS_1251.decode(&bytes);
+        let mut count = 0;
+        let mut stack: Vec<i64> = vec![];
+        let mut current: Option<i64> = None;
         for line in text.lines() {
             let line = line.trim();
             if line.starts_with('[') && line.ends_with(']') {
-                // Folder
                 let name = &line[1..line.len()-1];
-                let parent = current_parent;
-                let id = self.create_folder(parent, name)?;
-                folder_stack.push(id);
-                current_parent = Some(id);
-            } else if line == "{" {
-                // enter subfolder - already handled
+                let id = self.create_folder(current, name)?;
+                stack.push(id); current = Some(id);
             } else if line == "}" {
-                folder_stack.pop();
-                current_parent = folder_stack.last().copied();
+                stack.pop(); current = stack.last().copied();
             } else if line.contains('\t') {
                 let parts: Vec<&str> = line.splitn(2, '\t').collect();
-                if parts.len() == 2 {
-                    let url = parts[0].trim();
-                    let title = parts[1].trim();
-                    if !url.is_empty() && current_parent.is_some() {
-                        self.create_bookmark(current_parent.unwrap(), title, url)?;
-                        count += 1;
+                if parts.len() == 2 && !parts[0].trim().is_empty() {
+                    if let Some(parent) = current {
+                        self.create_bookmark(parent, parts[1].trim(), parts[0].trim())?; count += 1;
                     }
                 }
-            } else if line.starts_with("http") || line.starts_with("ftp") {
-                if current_parent.is_some() {
-                    self.create_bookmark(current_parent.unwrap(), line, line)?;
-                    count += 1;
-                }
+            } else if (line.starts_with("http") || line.starts_with("ftp")) && current.is_some() {
+                self.create_bookmark(current.unwrap(), line, line)?; count += 1;
             }
         }
-        let _ = file;
         Ok(count)
     }
+
+    // ── Import HTML (Netscape) ────────────────────────────────────────────────
+
+    pub fn import_html(&self, path: &Path) -> Result<usize> {
+        let content = std::fs::read_to_string(path).map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
+        let mut count = 0;
+        let mut stack: Vec<i64> = vec![];
+        let mut current: Option<i64> = None;
+        for line in content.lines() {
+            let lo = line.to_lowercase();
+            if lo.contains("<h3") {
+                let title = tag_content(line, "h3");
+                if !title.is_empty() {
+                    let id = self.create_folder(current, &unesc(&title))?;
+                    stack.push(id); current = Some(id);
+                }
+            } else if lo.contains("<a ") && lo.contains("href=") {
+                let url = attr_val(line, "href");
+                let title = tag_content(line, "a");
+                if !url.is_empty() {
+                    let parent = current.unwrap_or_else(|| self.create_folder(None, "Импорт").unwrap_or(1));
+                    self.create_bookmark(parent, &unesc(&title), &url)?; count += 1;
+                }
+            } else if lo.trim() == "</dl>" || lo.trim() == "</dl><p>" {
+                stack.pop(); current = stack.last().copied();
+            }
+        }
+        Ok(count)
+    }
+}
+
+fn esc(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+fn unesc(s: &str) -> String {
+    s.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'")
+}
+
+fn tag_content(line: &str, tag: &str) -> String {
+    let lo = line.to_lowercase();
+    let open = format!("<{}", tag);
+    let close = format!("</{}>", tag);
+    if let (Some(s), Some(e)) = (lo.find(&open), lo.find(&close)) {
+        if let Some(gt) = lo[s..].find('>') {
+            let cs = s + gt + 1;
+            if cs < e { return line[cs..e].to_string(); }
+        }
+    }
+    String::new()
+}
+
+fn attr_val(line: &str, attr: &str) -> String {
+    let lo = line.to_lowercase();
+    for q in ['"', '\''] {
+        let needle = format!("{}={}", attr, q);
+        if let Some(s) = lo.find(&needle) {
+            let vs = s + needle.len();
+            if let Some(e) = line[vs..].find(q) { return line[vs..vs+e].to_string(); }
+        }
+    }
+    String::new()
 }

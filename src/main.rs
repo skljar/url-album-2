@@ -246,9 +246,26 @@ fn show_ctx_bookmark(ui: &MainWindow, st: &State, id: i32) {
     }
 }
 
+fn last_db_path() -> std::path::PathBuf {
+    std::env::current_exe().unwrap_or_default()
+        .parent().unwrap_or(std::path::Path::new(".")).join("last_db.txt")
+}
+
+fn save_last_db(path: &std::path::Path) {
+    let _ = std::fs::write(last_db_path(), path.to_string_lossy().as_bytes());
+}
+
 fn main() {
-    let db = Database::open_default().expect("Cannot open database");
+    // Resume last opened DB
+    let db_path = std::fs::read_to_string(last_db_path())
+        .ok()
+        .map(|s| std::path::PathBuf::from(s.trim()))
+        .filter(|p| p.exists())
+        .unwrap_or_else(Database::default_path);
+
+    let db = Database::open_at(&db_path).unwrap_or_else(|_| Database::open_default().expect("Cannot open database"));
     db.init_schema().expect("Cannot init schema");
+    save_last_db(&db_path);
 
     let state = Arc::new(Mutex::new(State::new(db)));
     let ui = MainWindow::new().unwrap();
@@ -463,6 +480,7 @@ fn main() {
                 Ok(new_db) => { let _ = new_db.init_schema();
                     let mut st = s.lock().unwrap(); st.db = new_db; st.expanded.clear();
                     st.active_folder = None; st.selected_bookmark = None; st.search_query.clear(); st.check_results.clear();
+                    save_last_db(&path);
                     let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
                     ui.set_status_text(SharedString::from(format!("Открыта: {name}")));
                     refresh_ui(&ui, &st); }
@@ -479,6 +497,7 @@ fn main() {
                 Ok(new_db) => { let _ = new_db.init_schema();
                     let mut st = s.lock().unwrap(); st.db = new_db; st.expanded.clear();
                     st.active_folder = None; st.selected_bookmark = None; st.search_query.clear(); st.check_results.clear();
+                    save_last_db(&path);
                     let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
                     ui.set_status_text(SharedString::from(format!("Создана: {name}")));
                     refresh_ui(&ui, &st); }

@@ -175,9 +175,12 @@ impl State {
         }
         let (folders, bms) = self.db.total_counts();
         match self.active_folder {
-            Some(id) => SharedString::from(format!(
-                "Ссылок: {}  |  Всего: папок {folders}, ссылок {bms}  |  ↑↓ Enter Del F2 F4",
-                self.db.bookmark_count(id))),
+            Some(id) => {
+                let breadcrumb = self.db.get_breadcrumb(id).unwrap_or_default();
+                SharedString::from(format!(
+                    "{breadcrumb}  |  Ссылок: {}  |  Всего: {folders} папок, {bms} ссылок",
+                    self.db.bookmark_count(id)))
+            }
             None => SharedString::from(format!("Папок: {folders}  |  Ссылок: {bms}  |  Выберите папку")),
         }
     }

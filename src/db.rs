@@ -91,6 +91,22 @@ impl Database {
         self.conn.query_row("SELECT title FROM nodes WHERE id=?1", params![id], |r| r.get(0)).ok()
     }
 
+    pub fn get_breadcrumb(&self, folder_id: i64) -> Result<String> {
+        let mut path = Vec::new();
+        let mut current = folder_id;
+        loop {
+            if let Ok((title, parent)) = self.conn.query_row(
+                "SELECT title, parent FROM nodes WHERE id=?1", params![current],
+                |r| Ok((r.get::<_,String>(0)?, r.get::<_,Option<i64>>(1)?))) {
+                path.push(title);
+                match parent { Some(p) if p > 0 => current = p, _ => break }
+            } else { break; }
+            if path.len() > 10 { break; } // safety
+        }
+        path.reverse();
+        Ok(path.join(" › "))
+    }
+
     // ── Bookmarks ─────────────────────────────────────────────────────────────
 
     pub fn get_bookmarks(&self, folder_id: i64) -> Result<Vec<DbBookmark>> {

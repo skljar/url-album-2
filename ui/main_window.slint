@@ -146,22 +146,22 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // ── Toolbar row 2
+            // ── Toolbar row 2: DB
             Rectangle {
-                height: 30px;
+                height: 28px;
                 background: #eeeeee;
                 HorizontalBox {
                     padding: 3px; spacing: 3px; alignment: start;
                     Button { text: "БД: Новая";   clicked => { root.new-db(); } }
                     Button { text: "БД: Открыть"; clicked => { root.open-db(); } }
-                    Button { text: "БД: Копия";   clicked => { root.backup-db(); } }
+                    Button { text: "Копия";        clicked => { root.backup-db(); } }
                     Rectangle { width: 4px; }
                     Button { text: "→ HTML"; clicked => { root.export-html(); } }
                     Button { text: "→ TXT";  clicked => { root.export-txt(); } }
                     Rectangle { width: 4px; }
-                    Button { text: "← ua.dat";   clicked => { root.import-uadat(); } }
-                    Button { text: "← HTML";     clicked => { root.import-html(); } }
-                    Button { text: "← Браузер";  clicked => { root.import-browser(); } }
+                    Button { text: "← ua.dat"; clicked => { root.import-uadat(); } }
+                    Button { text: "← HTML";   clicked => { root.import-html(); } }
+                    Button { text: "← Браузер";clicked => { root.import-browser(); } }
                     Rectangle { width: 4px; }
                     Button { text: "Favicons"; clicked => { root.load-favicons(); } }
                     Button { text: "Проверка"; clicked => { root.check-links(); } }

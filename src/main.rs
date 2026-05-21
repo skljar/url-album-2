@@ -27,19 +27,38 @@ impl State {
             .parent().unwrap_or(std::path::Path::new(".")).join("settings.json")
     }
     fn save_settings(&self) {
-        let json = format!("{{\"tree_width\":{}}}", self.tree_width);
+        let expanded: Vec<i64> = self.expanded.iter().copied().collect();
+        let exp_str = expanded.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+        let active = self.active_folder.unwrap_or(0);
+        let json = format!("{{\"tree_width\":{},\"expanded\":\"{exp_str}\",\"active_folder\":{active}}}",
+            self.tree_width);
         let _ = std::fs::write(Self::settings_path(), json.as_bytes());
     }
-    fn load_settings() -> f32 {
+    fn load_settings() -> (f32, HashSet<i64>, Option<i64>) {
         let path = Self::settings_path();
+        let mut width = 210.0f32;
+        let mut expanded = HashSet::new();
+        let mut active: Option<i64> = None;
         if let Ok(s) = std::fs::read_to_string(&path) {
             if let Some(start) = s.find("\"tree_width\":") {
                 let rest = &s[start + 13..];
                 let end = rest.find(|c: char| !c.is_ascii_digit() && c != '.').unwrap_or(rest.len());
-                if let Ok(v) = rest[..end].parse::<f32>() { return v.max(100.0).min(500.0); }
+                if let Ok(v) = rest[..end].parse::<f32>() { width = v.max(100.0).min(500.0); }
+            }
+            if let Some(start) = s.find("\"expanded\":\"") {
+                let rest = &s[start + 12..];
+                let end = rest.find('"').unwrap_or(rest.len());
+                for id_str in rest[..end].split(',') {
+                    if let Ok(id) = id_str.parse::<i64>() { expanded.insert(id); }
+                }
+            }
+            if let Some(start) = s.find("\"active_folder\":") {
+                let rest = &s[start + 16..];
+                let end = rest.find(|c: char| !c.is_ascii_digit() && c != '-').unwrap_or(rest.len());
+                if let Ok(id) = rest[..end].parse::<i64>() { if id > 0 { active = Some(id); } }
             }
         }
-        210.0
+        (width, expanded, active)
     }
 }
 
@@ -50,10 +69,10 @@ impl State {
     fn new(db: Database) -> Self {
         let data_dir = std::env::current_exe().unwrap_or_default()
             .parent().unwrap_or(std::path::Path::new(".")).join("Data");
-        let tree_width = State::load_settings();
+        let (tree_width, expanded, active_folder) = State::load_settings();
         State {
-            db, expanded: HashSet::new(),
-            active_folder: None, selected_bookmark: None,
+            db, expanded,
+            active_folder, selected_bookmark: None,
             search_query: String::new(),
             sort_by: SortBy::Title, sort_asc: true,
             data_dir, check_results: Default::default(),
@@ -314,14 +333,14 @@ fn main() {
       ui.on_folder_clicked(move |id| {
         let ui = w.unwrap(); let mut st = s.lock().unwrap();
         st.active_folder = Some(id as i64); st.selected_bookmark = None;
-        st.expanded.insert(id as i64); refresh_ui(&ui, &st); }); }
+        st.expanded.insert(id as i64); st.save_settings(); refresh_ui(&ui, &st); }); }
 
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_folder_toggle(move |id| {
         let ui = w.unwrap(); let mut st = s.lock().unwrap();
         let fid = id as i64;
         if st.expanded.contains(&fid) { st.expanded.remove(&fid); } else { st.expanded.insert(fid); }
-        ui.set_folders(st.build_folder_model()); }); }
+        st.save_settings(); ui.set_folders(st.build_folder_model()); }); }
 
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_bookmark_clicked(move |id| {

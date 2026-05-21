@@ -1,6 +1,6 @@
 # Мониторинг темы ru-board — URL Album 2
 
-**Дата проверки:** 2026-05-21  
+**Дата проверки:** 2026-05-21 (повторная проверка, ~20:07 UTC)  
 **Тема:** https://forum.ru-board.com/topic.cgi?forum=5&topic=3250&start=860
 
 ---
@@ -13,8 +13,9 @@
 |---|---|---|
 | WebFetch (HTTPS) | start=860 | HTTP 403 |
 | WebFetch (HTTPS) | start=880 | HTTP 403 |
-| curl + Browser UA (HTTPS) | start=860 | HTTP 403 |
-| curl + Browser UA (HTTP) | start=860 | HTTP 403 |
+| curl + Browser UA | start=860 | Host not in allowlist |
+| webcache.google.com | start=860 | HTTP 403 |
+| web.archive.org | start=860 | Host not in allowlist |
 
 **Точная причина от сервера:**
 ```

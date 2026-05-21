@@ -105,7 +105,63 @@ impl State {
         }
     }
 
-    // ── Right panel bookmark list ─────────────────────────────────────────
+    // ── Right panel: subfolders + bookmarks ──────────────────────────────
+
+    fn build_right_panel_model(&self) -> ModelRc<RightItem> {
+        let favicons = self.db.get_favicons();
+        let favicons_dir = self.favicons_dir();
+        let mut items = Vec::new();
+
+        if let Some(folder_id) = self.active_folder {
+            // Subfolders first (папки всегда выше ссылок)
+            let all_folders = self.db.get_all_folders().unwrap_or_default();
+            for f in all_folders.iter().filter(|f| f.parent_id == Some(folder_id)) {
+                items.push(RightItem {
+                    id: f.id as i32, kind: 0,
+                    title: SharedString::from(f.title.as_str()),
+                    url: SharedString::default(),
+                    note: SharedString::default(),
+                    favicon: Image::default(), has_favicon: false,
+                    check_status: SharedString::default(),
+                    count: self.db.bookmark_count(f.id) as i32,
+                    selected: false,
+                });
+            }
+
+            // Then bookmarks
+            let mut bms = self.db.get_bookmarks(folder_id).unwrap_or_default();
+            match self.sort_by {
+                SortBy::Title => bms.sort_by(|a, b| {
+                    let c = a.title.to_lowercase().cmp(&b.title.to_lowercase());
+                    if self.sort_asc { c } else { c.reverse() }
+                }),
+                SortBy::Url => bms.sort_by(|a, b| {
+                    let c = a.url.as_deref().unwrap_or("").to_lowercase()
+                        .cmp(&b.url.as_deref().unwrap_or("").to_lowercase());
+                    if self.sort_asc { c } else { c.reverse() }
+                }),
+            }
+            for b in &bms {
+                let (fav_img, has_fav) = load_favicon(b.id, &favicons, &favicons_dir);
+                let check_status = self.check_results.get(&b.id)
+                    .map(|(ok, code)| if *ok { "OK".to_string() } else { code.clone() })
+                    .unwrap_or_default();
+                items.push(RightItem {
+                    id: b.id as i32, kind: 1,
+                    title: SharedString::from(b.title.as_str()),
+                    url: SharedString::from(b.url.as_deref().unwrap_or("")),
+                    note: SharedString::from(b.note.as_deref().unwrap_or("")),
+                    favicon: fav_img, has_favicon: has_fav,
+                    check_status: SharedString::from(check_status.as_str()),
+                    count: 0,
+                    selected: self.selected_bookmark == Some(b.id),
+                });
+            }
+        }
+        ModelRc::new(VecModel::from(items))
+    }
+
+    // ── Right panel bookmark list (search / all) ──────────────────────────
 
     fn build_bookmark_model(&self) -> ModelRc<BookmarkItem> {
         let mut bms = if !self.search_query.is_empty() {
@@ -245,6 +301,7 @@ fn load_favicon(id: i64, favicons: &std::collections::HashMap<i64, String>, dir:
 
 fn refresh_ui(ui: &MainWindow, st: &State) {
     ui.set_tree_nodes(st.build_tree_model());
+    ui.set_right_items(st.build_right_panel_model());
     ui.set_bookmarks(st.build_bookmark_model());
     ui.set_status_text(st.status());
     ui.set_sort_label(st.sort_label());
@@ -405,14 +462,6 @@ fn main() {
         ui.set_tree_nodes(st.build_tree_model());
         update_detail(&ui, &st); }); }
 
-    // Bookmark clicked in right panel list → show detail card
-    { let s = state.clone(); let w = ui.as_weak();
-      ui.on_list_bookmark_clicked(move |id| {
-        let ui = w.unwrap(); let mut st = s.lock().unwrap();
-        st.selected_bookmark = Some(id as i64);
-        ui.set_bookmarks(st.build_bookmark_model());
-        update_detail(&ui, &st); }); }
-
     // Back to list mode (Escape or "← Назад")
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_back_to_list(move || {
@@ -435,6 +484,22 @@ fn main() {
         let new_pos = match cur { None => 0, Some(p) => ((p as i32 + delta).rem_euclid(ids.len() as i32)) as usize };
         st.selected_bookmark = Some(ids[new_pos]);
         ui.set_bookmarks(st.build_bookmark_model()); update_detail(&ui, &st); }); }
+
+    // Navigate into subfolder from right panel
+    { let s = state.clone(); let w = ui.as_weak();
+      ui.on_right_folder_clicked(move |id| {
+        let ui = w.unwrap(); let mut st = s.lock().unwrap();
+        st.active_folder = Some(id as i64); st.selected_bookmark = None;
+        st.expanded.insert(id as i64); st.save_settings();
+        refresh_ui(&ui, &st); }); }
+
+    // Bookmark clicked in right panel → show detail
+    { let s = state.clone(); let w = ui.as_weak();
+      ui.on_right_bookmark_clicked(move |id| {
+        let ui = w.unwrap(); let mut st = s.lock().unwrap();
+        st.selected_bookmark = Some(id as i64);
+        ui.set_right_items(st.build_right_panel_model());
+        update_detail(&ui, &st); }); }
 
     // ── CRUD ─────────────────────────────────────────────────────────────────
 

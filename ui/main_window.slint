@@ -20,6 +20,20 @@ export struct TreeNode {
     has-favicon: bool,
 }
 
+// Unified right-panel item: folders + bookmarks
+export struct RightItem {
+    id: int,
+    kind: int,      // 0=folder, 1=bookmark
+    title: string,
+    url: string,
+    note: string,
+    favicon: image,
+    has-favicon: bool,
+    check-status: string,
+    count: int,     // folder bookmark count
+    selected: bool,
+}
+
 export struct BookmarkItem {
     id: int,
     title: string,
@@ -62,7 +76,8 @@ export component MainWindow inherits Window {
 
     // Data
     in property <[TreeNode]>    tree-nodes;
-    in property <[BookmarkItem]> bookmarks;
+    in property <[RightItem]>   right-items;   // right panel: subfolders + bookmarks
+    in property <[BookmarkItem]> bookmarks;     // search results / all bookmarks
     in property <string> status-text: "Готов";
     in property <string> detail-title: "";
     in property <string> detail-url: "";
@@ -100,7 +115,8 @@ export component MainWindow inherits Window {
     callback tree-folder-clicked(int);
     callback tree-folder-toggled(int);
     callback tree-bookmark-clicked(int);
-    callback list-bookmark-clicked(int);
+    callback right-folder-clicked(int);     // navigate into subfolder in right panel
+    callback right-bookmark-clicked(int);   // click bookmark in right panel → detail
     callback bookmark-open(string);
     callback bookmark-nav(int);
     callback back-to-list();
@@ -195,20 +211,16 @@ export component MainWindow inherits Window {
                                 background: node.selected ? #0078d4 : transparent;
                                 border-radius: 2px;
 
-                                // Left click
-                                main-ta := TouchArea {
+                                // Единый TouchArea для всех событий
+                                TouchArea {
                                     clicked => {
                                         if node.kind == 0 { root.tree-folder-clicked(node.id); }
                                         else { root.tree-bookmark-clicked(node.id); }
                                     }
                                     double-clicked => {
-                                        if node.kind == 0 { root.tree-folder-toggled(node.id); }
+                                        if node.kind == 0 { root.tree-folder-clicked(node.id); }
                                         else { root.bookmark-open(node.url); }
                                     }
-                                }
-
-                                // Right click
-                                TouchArea {
                                     pointer-event(e) => {
                                         if e.button == PointerEventButton.right && e.kind == PointerEventKind.down {
                                             if node.kind == 0 { root.folder-right-click(node.id); }
@@ -290,7 +302,7 @@ export component MainWindow inherits Window {
                 VerticalBox {
                     padding: 0px; spacing: 0px; horizontal-stretch: 1;
 
-                    // ── LIST mode: folder contents ─────────────────────────
+                    // ── LIST mode: subfolders + bookmarks ─────────────────
                     if root.active-bookmark == 0: VerticalBox {
                         padding: 0px; spacing: 0px;
 
@@ -299,7 +311,7 @@ export component MainWindow inherits Window {
                             HorizontalBox {
                                 padding-left: 6px; spacing: 0px;
                                 Text { text: "Название"; font-size: 11px; color: #555; width: 250px; vertical-alignment: center; }
-                                Text { text: "URL";      font-size: 11px; color: #555; horizontal-stretch: 1; vertical-alignment: center; }
+                                Text { text: "URL / Описание"; font-size: 11px; color: #555; horizontal-stretch: 1; vertical-alignment: center; }
                                 Rectangle { width: 4px; }
                                 Button { text: root.sort-label; clicked => { root.sort-toggle(); } }
                                 Rectangle { width: 4px; }
@@ -310,34 +322,70 @@ export component MainWindow inherits Window {
                             vertical-stretch: 1;
                             VerticalBox {
                                 padding: 2px; spacing: 0px; alignment: start;
-                                for b in root.bookmarks: Rectangle {
+
+                                // Right items: folders first, then bookmarks
+                                for item in root.right-items: Rectangle {
                                     height: 22px;
-                                    background: b.selected ? #0078d4 : transparent;
+                                    background: item.selected ? #0078d4 : transparent;
                                     border-radius: 2px;
+
                                     TouchArea {
-                                        clicked => { root.list-bookmark-clicked(b.id); }
-                                        double-clicked => { root.bookmark-open(b.url); }
-                                    }
-                                    TouchArea {
+                                        clicked => {
+                                            if item.kind == 0 { root.right-folder-clicked(item.id); }
+                                            else { root.right-bookmark-clicked(item.id); }
+                                        }
+                                        double-clicked => {
+                                            if item.kind == 0 { root.right-folder-clicked(item.id); }
+                                            else { root.bookmark-open(item.url); }
+                                        }
                                         pointer-event(e) => {
                                             if e.button == PointerEventButton.right && e.kind == PointerEventKind.down {
-                                                root.bookmark-right-click(b.id);
+                                                if item.kind == 0 { root.folder-right-click(item.id); }
+                                                else { root.bookmark-right-click(item.id); }
                                             }
                                         }
                                     }
+
                                     HorizontalBox {
                                         padding-left: 4px; padding-right: 4px; padding-top: 2px; padding-bottom: 2px; spacing: 3px;
+
+                                        // Icon: folder or favicon/dot
                                         Rectangle {
                                             width: 16px;
-                                            if b.has-favicon: Image { source: b.favicon; width: 16px; height: 16px; image-rendering: pixelated; }
-                                            if !b.has-favicon: Text { text: "●"; color: b.selected ? #aaccff : #aaa; font-size: 8px; horizontal-alignment: center; vertical-alignment: center; }
+                                            if item.kind == 0: Image {
+                                                source: Icons.folder-closed;
+                                                width: 16px; height: 16px; image-rendering: pixelated;
+                                            }
+                                            if item.kind == 1 && item.has-favicon: Image {
+                                                source: item.favicon; width: 16px; height: 16px; image-rendering: pixelated;
+                                            }
+                                            if item.kind == 1 && !item.has-favicon: Text {
+                                                text: "●"; color: item.selected ? #aaccff : #aaa;
+                                                font-size: 8px; horizontal-alignment: center; vertical-alignment: center;
+                                            }
                                         }
-                                        Text { text: b.title; color: b.selected ? white : #1a1a1a; font-size: 13px; vertical-alignment: center; width: 234px; overflow: elide; }
-                                        Text { text: b.url;   color: b.selected ? #bbddff : #0055cc; font-size: 12px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
-                                        if b.check-status != "": Rectangle {
+
+                                        Text {
+                                            text: item.title;
+                                            color: item.selected ? white : #1a1a1a;
+                                            font-size: 13px; vertical-alignment: center; width: 234px; overflow: elide;
+                                        }
+                                        Text {
+                                            text: item.kind == 0 ? ("Папка") : item.url;
+                                            color: item.kind == 0 ? (item.selected ? #cce0ff : #666) : (item.selected ? #bbddff : #0055cc);
+                                            font-size: 12px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1;
+                                        }
+
+                                        // Folder count badge
+                                        if item.kind == 0 && item.count > 0: Rectangle {
+                                            width: max(18px, item.count > 9 ? 22px : 18px); height: 14px;
+                                            background: item.selected ? #ffffff30 : #0078d420; border-radius: 7px;
+                                            Text { text: item.count; color: item.selected ? white : #0078d4; font-size: 9px; horizontal-alignment: center; vertical-alignment: center; }
+                                        }
+                                        if item.kind == 1 && item.check-status != "": Rectangle {
                                             width: 30px; border-radius: 3px;
-                                            background: b.check-status == "OK" ? #22aa44 : #cc2200;
-                                            Text { text: b.check-status; color: white; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
+                                            background: item.check-status == "OK" ? #22aa44 : #cc2200;
+                                            Text { text: item.check-status; color: white; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
                                         }
                                     }
                                 }

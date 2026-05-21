@@ -119,6 +119,13 @@ CREATE TABLE nodes (
 
 ---
 
+## Архитектура потоков
+
+State использует `Arc<Mutex<State>>` для совместного доступа с фоновыми потоками:
+- Главный поток: Slint event loop + все UI callbacks
+- Фоновые потоки: fetch_favicon, check_url (по одному потоку на операцию)
+- `slint::invoke_from_event_loop(...)` для обновления UI из фоновых потоков
+
 ## Что реализовано
 
 - [x] Дерево папок с раскрытием/закрытием
@@ -140,10 +147,8 @@ CREATE TABLE nodes (
 ## Что TODO
 
 - [ ] Drag & Drop в дереве
-- [ ] Контекстное меню (правый клик)
-- [ ] Сортировка ссылок
+- [ ] Resizable панели (сплиттер)
 - [ ] Скриншоты через shdocvw (IE WebBrowser Control — как в оригинальном URL Album)
-- [ ] Favicon загрузка
 - [ ] Несколько колонок (resizable)
-- [ ] Backup / history
 - [ ] Резервные копии БД
+- [ ] Favicon — показывать в дереве тоже

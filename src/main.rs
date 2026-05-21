@@ -270,8 +270,12 @@ fn main() {
     let state = Arc::new(Mutex::new(State::new(db)));
     let ui = MainWindow::new().unwrap();
     { let st = state.lock().unwrap();
-      ui.set_tree_width_px(st.tree_width as i32); }
+      ui.set_tree_width_px(st.tree_width as i32);
+      let db_name = db_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+      ui.set_db_name(SharedString::from(db_name.as_str())); }
     refresh_ui(&ui, &state.lock().unwrap());
+
+    ui.on_focus_search(|| {});  // handled in Slint via search-box.focus()
 
     // ── Splitter ──────────────────────────────────────────────────────────────
     { let s = state.clone();
@@ -482,6 +486,7 @@ fn main() {
                     st.active_folder = None; st.selected_bookmark = None; st.search_query.clear(); st.check_results.clear();
                     save_last_db(&path);
                     let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                    ui.set_db_name(SharedString::from(name.as_str()));
                     ui.set_status_text(SharedString::from(format!("Открыта: {name}")));
                     refresh_ui(&ui, &st); }
                 Err(e) => { ui.set_status_text(SharedString::from(format!("Ошибка: {e}"))); }
@@ -499,6 +504,7 @@ fn main() {
                     st.active_folder = None; st.selected_bookmark = None; st.search_query.clear(); st.check_results.clear();
                     save_last_db(&path);
                     let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                    ui.set_db_name(SharedString::from(name.as_str()));
                     ui.set_status_text(SharedString::from(format!("Создана: {name}")));
                     refresh_ui(&ui, &st); }
                 Err(e) => { ui.set_status_text(SharedString::from(format!("Ошибка: {e}"))); }

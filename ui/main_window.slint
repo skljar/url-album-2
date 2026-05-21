@@ -21,7 +21,7 @@ export struct BookmarkItem {
 }
 
 export component MainWindow inherits Window {
-    title: "URL Album 3";
+    title: "URL Album 3 — " + root.db-name;
     preferred-width: 960px;
     preferred-height: 640px;
     min-width: 500px;
@@ -36,6 +36,7 @@ export component MainWindow inherits Window {
     in property <string> detail-url: "";
     in property <string> detail-note: "";
     in property <string> sort-label: "Название ↑";
+    in property <string> db-name: "album.db";
 
     // Tree width (resizable, stored as int pixels)
     in-out property <int> tree-width-px: 210;
@@ -95,6 +96,7 @@ export component MainWindow inherits Window {
     callback sort-toggle();
     callback tree-width-changed(int);
     callback load-favicons();
+    callback focus-search();
     callback check-links();
 
     callback folder-right-click(int);
@@ -110,6 +112,7 @@ export component MainWindow inherits Window {
             if e.text == Key.Return   { if root.detail-url != "" { root.bookmark-open(root.detail-url); } return accept; }
             if e.text == Key.UpArrow  { root.bookmark-nav(-1); return accept; }
             if e.text == Key.DownArrow{ root.bookmark-nav(1);  return accept; }
+            if e.modifiers.control && e.text == "f" { search-box.focus(); return accept; }
             reject
         }
 
@@ -129,7 +132,7 @@ export component MainWindow inherits Window {
                     Button { text: "Имя [F2]";      clicked => { root.rename-requested(); } }
                     Button { text: "Удалить [Del]"; clicked => { root.delete-selected(); } }
                     Rectangle { horizontal-stretch: 1; }
-                    LineEdit { width: 190px; placeholder-text: "Поиск..."; edited => { root.search-changed(self.text); } }
+                    search-box := LineEdit { width: 190px; placeholder-text: "Поиск... (Ctrl+F)"; edited => { root.search-changed(self.text); } }
                 }
             }
 

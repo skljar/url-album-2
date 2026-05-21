@@ -1,1 +1,15 @@
 /target
+*.db
+*.db-shm
+*.db-wal
+last_db.txt
+recent_dbs.txt
+settings.json
+dist/URL-Album-3/*.db
+dist/URL-Album-3/*.db-*
+dist/URL-Album-3/*.txt
+dist/URL-Album-3/*.json
+dist/URL-Album-3.0-alpha/
+snap.py
+seed_uadat.py
+test_*.py

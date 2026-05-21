@@ -88,6 +88,7 @@ export component MainWindow inherits Window {
     in property <string> sort-label: "Название ↑";
     in property <string> db-name: "album.db";
     in property <int>    active-bookmark: 0;
+    in property <string> detail-created: "";
 
     // Favicon progress panel
     in property <bool>   show-favicon-progress: false;
@@ -133,6 +134,7 @@ export component MainWindow inherits Window {
     callback new-bookmark-confirmed(string, string, string);  // title, url, note
     callback confirm-delete-yes();
     callback expand-all(); callback collapse-all();
+    callback cancel-favicon();
     callback rename-requested();
     callback rename-confirmed(string);
     callback edit-requested();
@@ -221,9 +223,9 @@ export component MainWindow inherits Window {
                                 background: node.selected ? #0078d4 : transparent;
                                 border-radius: 2px;
 
-                                // Клик = выбрать (без раскрытия)
-                                // Двойной клик = toggle expand (только папки)
-                                // Правый клик = контекстное меню
+                                // Клик папки = выбрать+показать содержимое (без раскрытия)
+                                // Двойной клик папки = toggle открыть/закрыть ветку
+                                // [+]/[-] кнопка = toggle
                                 TouchArea {
                                     clicked => {
                                         if node.kind == 0 { root.tree-folder-clicked(node.id); }
@@ -246,21 +248,22 @@ export component MainWindow inherits Window {
                                     padding-right: 2px; padding-top: 1px; padding-bottom: 1px;
                                     spacing: 3px;
 
-                                    // [+]/[-] for folders, spacer for bookmarks
+                                    // [+]/[-] кнопка крупнее для папок
                                     if node.kind == 0: Rectangle {
-                                        width: 16px; height: 16px;
-                                        border-color: node.has-children ? (node.selected ? #ffffff60 : #aaa) : transparent;
+                                        width: 18px; height: 18px;
+                                        border-color: node.has-children ? (node.selected ? #ffffff80 : #999) : transparent;
                                         border-width: node.has-children ? 1px : 0px;
-                                        border-radius: 2px; background: transparent;
+                                        border-radius: 2px;
+                                        background: node.has-children ? (expand-ta.has-hover ? #e0e8f0 : transparent) : transparent;
                                         if node.has-children: Text {
-                                            text: node.expanded ? "-" : "+";
-                                            color: node.selected ? white : #555;
-                                            font-size: 12px; font-weight: 700;
+                                            text: node.expanded ? "−" : "+";
+                                            color: node.selected ? white : #444;
+                                            font-size: 14px; font-weight: 900;
                                             horizontal-alignment: center; vertical-alignment: center;
                                         }
-                                        TouchArea { clicked => { root.tree-folder-toggled(node.id); } }
+                                        expand-ta := TouchArea { clicked => { root.tree-folder-toggled(node.id); } }
                                     }
-                                    if node.kind == 1: Rectangle { width: 16px; }  // indent spacer
+                                    if node.kind == 1: Rectangle { width: 18px; }  // indent spacer
 
                                     // Folder icon / favicon / dot
                                     if node.kind == 0: Image {
@@ -414,98 +417,123 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    // ── DETAIL mode: bookmark card ─────────────────────────
+                    // ── DETAIL mode: bookmark card (как в URL Album 2) ────
                     if root.active-bookmark != 0: VerticalBox {
                         padding: 0px; spacing: 0px;
 
-                        // Back button header
+                        // Header with back button
                         Rectangle {
-                            height: 26px; background: #f0f0f0; border-color: #ddd; border-width: 1px;
+                            height: 26px; background: #e8eef8; border-color: #c0cce0; border-width: 1px;
                             HorizontalBox {
-                                padding: 4px; spacing: 8px; alignment: start;
-                                Button { text: "← Назад"; clicked => { root.back-to-list(); } }
-                                Text { text: "Свойства ссылки"; font-size: 12px; color: #555; vertical-alignment: center; }
+                                padding-left: 6px; padding-right: 6px;
+                                padding-top: 3px; padding-bottom: 3px;
+                                spacing: 8px; alignment: start;
+                                Button { text: "← Назад [Esc]"; clicked => { root.back-to-list(); } }
+                                Text { text: "Свойства ссылки"; font-size: 12px; color: #445; vertical-alignment: center; font-weight: 600; }
                             }
                         }
 
-                        // Detail card body
                         ScrollView {
                             vertical-stretch: 1;
-                            Rectangle {
-                                background: white;
-                                VerticalBox {
-                                    padding: 20px; spacing: 14px; alignment: start;
+                            VerticalBox {
+                                padding: 12px; spacing: 10px; alignment: start;
 
-                                    // Favicon + Title row
-                                    HorizontalBox {
-                                        spacing: 12px; alignment: start;
+                                // ── Title block: favicon + title
+                                Rectangle {
+                                    background: #f4f6fa; border-radius: 6px;
+                                    border-color: #d0d8e8; border-width: 1px;
+                                    VerticalBox {
+                                        padding: 12px; spacing: 6px;
 
-                                        // Favicon (32x32 or dot)
-                                        Rectangle {
-                                            width: 32px; height: 32px;
-                                            if root.detail-has-favicon: Image {
-                                                source: root.detail-favicon;
-                                                width: 32px; height: 32px;
-                                                image-rendering: pixelated;
+                                        HorizontalBox {
+                                            spacing: 12px; alignment: start;
+
+                                            // Favicon 48x48
+                                            Rectangle {
+                                                width: 48px; height: 48px;
+                                                border-radius: 6px;
+                                                background: #e8ecf4;
+                                                border-color: #c8d0e0; border-width: 1px;
+                                                if root.detail-has-favicon: Image {
+                                                    source: root.detail-favicon;
+                                                    width: 32px; height: 32px;
+                                                    image-rendering: pixelated;
+                                                    x: 8px; y: 8px;
+                                                }
+                                                if !root.detail-has-favicon: Text {
+                                                    text: "🌐"; font-size: 24px;
+                                                    horizontal-alignment: center; vertical-alignment: center;
+                                                }
                                             }
-                                            if !root.detail-has-favicon: Rectangle {
-                                                width: 32px; height: 32px;
-                                                background: #f0f0f0; border-radius: 4px;
-                                                border-color: #ddd; border-width: 1px;
-                                                Text { text: "●"; font-size: 16px; color: #aaa; horizontal-alignment: center; vertical-alignment: center; }
-                                            }
-                                        }
 
-                                        // Title
-                                        Text {
-                                            text: root.detail-title;
-                                            font-size: 16px; font-weight: 700;
-                                            color: #111;
-                                            wrap: word-wrap;
-                                            vertical-alignment: center;
+                                            // Title
+                                            VerticalBox {
+                                                spacing: 4px;
+                                                Text {
+                                                    text: root.detail-title;
+                                                    font-size: 15px; font-weight: 700; color: #111;
+                                                    wrap: word-wrap;
+                                                }
+                                                if root.detail-created != "": Text {
+                                                    text: "Добавлено: " + root.detail-created;
+                                                    font-size: 11px; color: #888;
+                                                }
+                                            }
                                         }
                                     }
+                                }
 
-                                    // URL
-                                    Rectangle {
-                                        background: #f0f4ff; border-radius: 4px;
-                                        border-color: #c0d0f0; border-width: 1px;
-                                        height: 36px;
+                                // ── URL block
+                                Rectangle {
+                                    background: #eef2ff; border-radius: 5px;
+                                    border-color: #b8c8f0; border-width: 1px;
+                                    VerticalBox {
+                                        padding: 8px; spacing: 6px;
+                                        Text { text: "Адрес:"; font-size: 11px; color: #556; font-weight: 600; }
                                         HorizontalBox {
-                                            padding: 8px; spacing: 8px;
+                                            spacing: 8px;
                                             Text {
                                                 text: root.detail-url;
-                                                font-size: 13px; color: #0044cc;
+                                                font-size: 12px; color: #0033aa;
                                                 vertical-alignment: center;
-                                                overflow: elide;
-                                                horizontal-stretch: 1;
+                                                overflow: elide; horizontal-stretch: 1;
                                             }
                                             Button {
-                                                text: "Открыть";
-                                                primary: true;
+                                                text: "Открыть"; primary: true;
                                                 clicked => { root.bookmark-open(root.detail-url); }
                                             }
                                         }
                                     }
+                                }
 
-                                    // Note (if any)
-                                    if root.detail-note != "": Rectangle {
-                                        background: #fffce8; border-radius: 4px;
-                                        border-color: #e8e0a0; border-width: 1px;
-                                        VerticalBox {
-                                            padding: 8px;
-                                            Text { text: "Заметка:"; font-size: 11px; color: #888; }
-                                            Text { text: root.detail-note; font-size: 13px; color: #333; wrap: word-wrap; }
-                                        }
+                                // ── Note block (only if exists)
+                                if root.detail-note != "": Rectangle {
+                                    background: #fffbe8; border-radius: 5px;
+                                    border-color: #e0d880; border-width: 1px;
+                                    VerticalBox {
+                                        padding: 8px; spacing: 4px;
+                                        Text { text: "Заметка:"; font-size: 11px; color: #776; font-weight: 600; }
+                                        Text { text: root.detail-note; font-size: 13px; color: #333; wrap: word-wrap; }
                                     }
+                                }
 
-                                    // Action buttons
-                                    HorizontalBox {
-                                        spacing: 8px; alignment: start;
-                                        Button { text: "Редактировать [F4]"; clicked => { root.edit-requested(); } }
-                                        Button { text: "Переименовать [F2]"; clicked => { root.rename-requested(); } }
-                                        Button { text: "Удалить [Del]";      clicked => { root.delete-selected(); } }
+                                // ── No screenshot placeholder
+                                Rectangle {
+                                    height: 80px; background: #f8f8f8; border-radius: 5px;
+                                    border-color: #ddd; border-width: 1px;
+                                    VerticalBox {
+                                        alignment: center;
+                                        Text { text: "Скриншот сайта"; font-size: 12px; color: #bbb; horizontal-alignment: center; }
+                                        Text { text: "недоступен"; font-size: 11px; color: #ccc; horizontal-alignment: center; }
                                     }
+                                }
+
+                                // ── Action buttons
+                                HorizontalBox {
+                                    spacing: 8px; alignment: start;
+                                    Button { text: "Редактировать [F4]"; clicked => { root.edit-requested(); } }
+                                    Button { text: "Имя [F2]";           clicked => { root.rename-requested(); } }
+                                    Button { text: "Удалить [Del]";      clicked => { root.delete-selected(); } }
                                 }
                             }
                         }
@@ -733,9 +761,9 @@ export component MainWindow inherits Window {
                 }
                 Rectangle {
                     width: 16px; height: 16px; border-radius: 8px;
-                    background: #0078d4;
+                    background: cancel-ta.has-hover ? #cc2200 : #888;
                     Text { text: "×"; color: white; font-size: 11px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
-                    TouchArea { clicked => { /* cancel would need callback */ } }
+                    cancel-ta := TouchArea { clicked => { root.cancel-favicon(); } }
                 }
             }
 

@@ -23,6 +23,7 @@ struct State {
     data_dir: std::path::PathBuf,
     check_results: std::collections::HashMap<i64, (bool, String)>,
     tree_width: f32,
+    favicon_cancel: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -37,6 +38,7 @@ impl State {
             db, expanded, active_folder, selected_bookmark: None,
             search_query: String::new(), sort_by: SortBy::Title, sort_asc: true,
             data_dir, check_results: Default::default(), tree_width,
+            favicon_cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -324,6 +326,10 @@ fn update_detail(ui: &MainWindow, st: &State) {
             ui.set_detail_title(SharedString::from(bm.title.as_str()));
             ui.set_detail_url(SharedString::from(bm.url.as_deref().unwrap_or("")));
             ui.set_detail_note(SharedString::from(bm.note.as_deref().unwrap_or("")));
+            // Format created date nicely
+            let created = bm.created.as_deref().unwrap_or("").to_string();
+            let created_display = if created.len() >= 10 { created[..10].to_string() } else { created };
+            ui.set_detail_created(SharedString::from(created_display.as_str()));
             ui.set_detail_favicon(fav_img);
             ui.set_detail_has_favicon(has_fav);
             ui.set_active_bookmark(id as i32);
@@ -333,6 +339,7 @@ fn update_detail(ui: &MainWindow, st: &State) {
     ui.set_detail_title(SharedString::default());
     ui.set_detail_url(SharedString::default());
     ui.set_detail_note(SharedString::default());
+    ui.set_detail_created(SharedString::default());
     ui.set_detail_favicon(Image::default());
     ui.set_detail_has_favicon(false);
     ui.set_active_bookmark(0);
@@ -704,12 +711,15 @@ fn main() {
         let bms = { let st = s.lock().unwrap(); st.db.get_bookmarks(folder_id as i64).unwrap_or_default() };
         let favicons_dir = { s.lock().unwrap().favicons_dir() };
         let total = bms.len(); if total == 0 { return; }
+        { s.lock().unwrap().favicon_cancel.store(false, std::sync::atomic::Ordering::Relaxed); }
         ui.set_show_favicon_progress(true);
         ui.set_favicon_progress_text(SharedString::from(format!("Favicon: 0 / {total}")));
         ui.set_favicon_progress_value(0.0);
         let s2 = s.clone(); let w2 = w.clone();
+        let cancel_flag = s.lock().unwrap().favicon_cancel.clone();
         std::thread::spawn(move || {
             for (i, bm) in bms.into_iter().enumerate() {
+                if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) { break; }
                 if let Some(url) = &bm.url {
                     if let Some(fname) = net::fetch_favicon(url, &favicons_dir) {
                         let _ = s2.lock().unwrap().db.set_favicon(bm.id, &fname);
@@ -718,11 +728,12 @@ fn main() {
                 let done = i + 1;
                 let progress = done as f32 / total as f32;
                 let s3 = s2.clone(); let w3 = w2.clone();
+                let is_last = done == total;
                 let _ = slint::invoke_from_event_loop(move || {
                     let ui = w3.unwrap();
                     ui.set_favicon_progress_text(SharedString::from(format!("Favicon: {done} / {total}")));
                     ui.set_favicon_progress_value(progress);
-                    if done == total {
+                    if is_last {
                         let st = s3.lock().unwrap();
                         ui.set_tree_nodes(st.build_tree_model());
                         ui.set_right_items(st.build_right_panel_model());
@@ -867,12 +878,15 @@ fn main() {
             (st.active_folder.map(|id| st.db.get_bookmarks(id).unwrap_or_default()).unwrap_or_default(), st.favicons_dir()) };
         let total = bms.len();
         if total == 0 { ui.set_status_text(SharedString::from("Нет ссылок для загрузки favicon")); return; }
+        { s.lock().unwrap().favicon_cancel.store(false, std::sync::atomic::Ordering::Relaxed); }
         ui.set_show_favicon_progress(true);
         ui.set_favicon_progress_text(SharedString::from(format!("Favicon: 0 / {total}")));
         ui.set_favicon_progress_value(0.0);
         let s2 = s.clone(); let w2 = w.clone();
+        let cancel_flag = s.lock().unwrap().favicon_cancel.clone();
         std::thread::spawn(move || {
             for (i, bm) in bms.into_iter().enumerate() {
+                if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) { break; }
                 if let Some(url) = &bm.url {
                     if let Some(fname) = net::fetch_favicon(url, &favicons_dir) {
                         let _ = s2.lock().unwrap().db.set_favicon(bm.id, &fname);
@@ -881,11 +895,12 @@ fn main() {
                 let done = i + 1;
                 let progress = done as f32 / total as f32;
                 let s3 = s2.clone(); let w3 = w2.clone();
+                let is_last = done == total;
                 let _ = slint::invoke_from_event_loop(move || {
                     let ui = w3.unwrap();
                     ui.set_favicon_progress_text(SharedString::from(format!("Favicon: {done} / {total}")));
                     ui.set_favicon_progress_value(progress);
-                    if done == total {
+                    if is_last {
                         let st = s3.lock().unwrap();
                         ui.set_tree_nodes(st.build_tree_model());
                         ui.set_right_items(st.build_right_panel_model());
@@ -960,6 +975,14 @@ fn main() {
     { let s = state.clone();
       ui.on_tree_width_changed(move |w| {
         let mut st = s.lock().unwrap(); st.tree_width = w as f32; st.save_settings(); }); }
+
+    // Cancel favicon loading
+    { let s = state.clone(); let w = ui.as_weak();
+      ui.on_cancel_favicon(move || {
+        let ui = w.unwrap(); let st = s.lock().unwrap();
+        st.favicon_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        ui.set_show_favicon_progress(false);
+        ui.set_status_text(SharedString::from("Загрузка favicon отменена")); }); }
 
     // Expand all folders
     { let s = state.clone(); let w = ui.as_weak();

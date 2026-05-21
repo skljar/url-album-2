@@ -12,6 +12,7 @@ pub struct DbBookmark {
     pub title: String,
     pub url: Option<String>,
     pub note: Option<String>,
+    pub created: Option<String>,
 }
 
 pub struct Database {
@@ -111,20 +112,20 @@ impl Database {
 
     pub fn get_bookmarks(&self, folder_id: i64) -> Result<Vec<DbBookmark>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id,title,url,note FROM nodes WHERE parent=?1 AND kind='bookmark' ORDER BY sort_idx,title")?;
+            "SELECT id,title,url,note,created FROM nodes WHERE parent=?1 AND kind='bookmark' ORDER BY sort_idx,title")?;
         let mut result = Vec::new();
-        for row in stmt.query_map(params![folder_id], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,String>(1)?, r.get::<_,Option<String>>(2)?, r.get::<_,Option<String>>(3)?)))? {
-            let (id, title, url, note) = row?;
-            result.push(DbBookmark { id, title, url, note });
+        for row in stmt.query_map(params![folder_id], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,String>(1)?, r.get::<_,Option<String>>(2)?, r.get::<_,Option<String>>(3)?, r.get::<_,Option<String>>(4)?)))? {
+            let (id, title, url, note, created) = row?;
+            result.push(DbBookmark { id, title, url, note, created });
         }
         Ok(result)
     }
 
     pub fn get_bookmark(&self, id: i64) -> Option<DbBookmark> {
         self.conn.query_row(
-            "SELECT id,title,url,note FROM nodes WHERE id=?1",
+            "SELECT id,title,url,note,created FROM nodes WHERE id=?1",
             params![id], |r| Ok(DbBookmark {
-                id: r.get(0)?, title: r.get(1)?, url: r.get(2)?, note: r.get(3)?
+                id: r.get(0)?, title: r.get(1)?, url: r.get(2)?, note: r.get(3)?, created: r.get(4)?
             })).ok()
     }
 
@@ -193,7 +194,7 @@ impl Database {
         let mut result = Vec::new();
         for row in stmt.query_map([], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,String>(1)?, r.get::<_,Option<String>>(2)?, r.get::<_,Option<String>>(3)?)))? {
             let (id, title, url, note) = row?;
-            result.push(DbBookmark { id, title, url, note });
+            result.push(DbBookmark { id, title, url, note, created: None });
         }
         Ok(result)
     }
@@ -206,7 +207,7 @@ impl Database {
         let mut result = Vec::new();
         for row in stmt.query_map([], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,String>(1)?, r.get::<_,Option<String>>(2)?, r.get::<_,Option<String>>(3)?)))? {
             let (id, title, url, note) = row?;
-            result.push(DbBookmark { id, title, url, note });
+            result.push(DbBookmark { id, title, url, note, created: None });
         }
         Ok(result)
     }
@@ -220,7 +221,7 @@ impl Database {
         let mut result = Vec::new();
         for row in stmt.query_map(params![q], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,String>(1)?, r.get::<_,Option<String>>(2)?, r.get::<_,Option<String>>(3)?)))? {
             let (id, title, url, note) = row?;
-            result.push(DbBookmark { id, title, url, note });
+            result.push(DbBookmark { id, title, url, note, created: None });
         }
         Ok(result)
     }

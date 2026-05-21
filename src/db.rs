@@ -271,30 +271,58 @@ impl Database {
     }
 
     // ── Import ua.dat ─────────────────────────────────────────────────────────
+    // Format: leading tabs = depth, fields tab-separated:
+    // title \t url \t image \t note \t created \t visited \t 0
+    // If url == "#" → folder node
 
     pub fn import_uadat(&self, path: &Path) -> Result<usize> {
         let bytes = std::fs::read(path).map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
         let (text, _, _) = encoding_rs::WINDOWS_1251.decode(&bytes);
+
         let mut count = 0;
-        let mut stack: Vec<i64> = vec![];
-        let mut current: Option<i64> = None;
+        // folder_stack[depth] = folder_id at that depth
+        let mut folder_stack: Vec<Option<i64>> = vec![None]; // depth 0 = root (no parent)
+
         for line in text.lines() {
-            let line = line.trim();
-            if line.starts_with('[') && line.ends_with(']') {
-                let name = &line[1..line.len()-1];
-                let id = self.create_folder(current, name)?;
-                stack.push(id); current = Some(id);
-            } else if line == "}" {
-                stack.pop(); current = stack.last().copied();
-            } else if line.contains('\t') {
-                let parts: Vec<&str> = line.splitn(2, '\t').collect();
-                if parts.len() == 2 && !parts[0].trim().is_empty() {
-                    if let Some(parent) = current {
-                        self.create_bookmark(parent, parts[1].trim(), parts[0].trim())?; count += 1;
-                    }
+            if line.trim().is_empty() { continue; }
+
+            // Count leading tabs = depth of this item
+            let depth = line.chars().take_while(|&c| c == '\t').count();
+            let content = &line[depth..]; // strip leading tabs
+
+            // Split by tab
+            let fields: Vec<&str> = content.splitn(7, '\t').collect();
+            if fields.is_empty() { continue; }
+
+            let title = fields[0].trim();
+            let url = fields.get(1).map(|s| s.trim()).unwrap_or("");
+            let note = fields.get(3).map(|s| s.trim()).unwrap_or("");
+
+            if title.is_empty() { continue; }
+
+            // Ensure stack is large enough
+            while folder_stack.len() <= depth { folder_stack.push(None); }
+
+            // Parent is the folder at depth-1
+            let parent = if depth == 0 { None } else { folder_stack[depth - 1] };
+
+            if url == "#" {
+                // It's a folder
+                let folder_id = self.create_folder(parent, title)?;
+                // Store at this depth level
+                if folder_stack.len() <= depth { folder_stack.push(Some(folder_id)); }
+                else { folder_stack[depth] = Some(folder_id); }
+                // Clear deeper levels
+                for i in (depth + 1)..folder_stack.len() { folder_stack[i] = None; }
+            } else if !url.is_empty() && url != "#" {
+                // It's a bookmark
+                if let Some(parent_id) = parent {
+                    let note_str = if note.is_empty() { "" } else { note };
+                    self.conn.execute(
+                        "INSERT INTO nodes (parent, kind, title, url, note) VALUES (?1,'bookmark',?2,?3,?4)",
+                        rusqlite::params![parent_id, title, url, if note_str.is_empty() { None } else { Some(note_str) }])?;
+                    count += 1;
                 }
-            } else if (line.starts_with("http") || line.starts_with("ftp")) && current.is_some() {
-                self.create_bookmark(current.unwrap(), line, line)?; count += 1;
             }
         }
         Ok(count)

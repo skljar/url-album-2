@@ -115,6 +115,26 @@ impl Database {
         Ok(self.conn.last_insert_rowid())
     }
 
+    pub fn set_favicon(&self, id: i64, filename: &str) -> Result<()> {
+        self.conn.execute("UPDATE nodes SET note=?1 WHERE id=?2 AND kind='bookmark'",
+            params![if filename.is_empty() { None } else { Some(filename) }, id])?;
+        // Store favicon filename in a separate way — add favicon column if not exists
+        let _ = self.conn.execute_batch("ALTER TABLE nodes ADD COLUMN favicon TEXT;");
+        self.conn.execute("UPDATE nodes SET favicon=?1 WHERE id=?2", params![filename, id])?;
+        Ok(())
+    }
+
+    pub fn get_favicons(&self) -> std::collections::HashMap<i64, String> {
+        let mut map = std::collections::HashMap::new();
+        let _ = self.conn.execute_batch("ALTER TABLE nodes ADD COLUMN favicon TEXT;");
+        if let Ok(mut stmt) = self.conn.prepare(
+            "SELECT id, favicon FROM nodes WHERE kind='bookmark' AND favicon IS NOT NULL AND favicon != ''") {
+            let _ = stmt.query_map([], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,String>(1)?)))
+                .map(|rows| for row in rows.flatten() { map.insert(row.0, row.1); });
+        }
+        map
+    }
+
     pub fn update_bookmark(&self, id: i64, title: &str, url: &str, note: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE nodes SET title=?1, url=?2, note=?3 WHERE id=?4",

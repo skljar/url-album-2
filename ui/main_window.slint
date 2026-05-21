@@ -14,6 +14,9 @@ export struct BookmarkItem {
     title: string,
     url: string,
     note: string,
+    favicon: image,
+    has-favicon: bool,
+    check-status: string,   // "" | "OK" | "404" | "Err"
     selected: bool,
 }
 
@@ -85,6 +88,8 @@ export component MainWindow inherits Window {
     // Callbacks — other
     callback search-changed(string);
     callback sort-toggle();
+    callback load-favicons();
+    callback check-links();
 
     callback folder-right-click(int);
     callback bookmark-right-click(int);
@@ -136,6 +141,9 @@ export component MainWindow inherits Window {
                     Rectangle { width: 4px; }
                     Button { text: "← ua.dat"; clicked => { root.import-uadat(); } }
                     Button { text: "← HTML";   clicked => { root.import-html(); } }
+                    Rectangle { width: 4px; }
+                    Button { text: "Favicon";   clicked => { root.load-favicons(); } }
+                    Button { text: "Проверить"; clicked => { root.check-links(); } }
                 }
             }
 
@@ -248,12 +256,42 @@ export component MainWindow inherits Window {
                                 }
 
                                 HorizontalBox {
-                                    padding-left: 6px; padding-right: 4px;
-                                    padding-top: 2px; padding-bottom: 2px; spacing: 0px;
+                                    padding-left: 4px; padding-right: 4px;
+                                    padding-top: 2px; padding-bottom: 2px; spacing: 3px;
+
+                                    // Favicon or dot
+                                    Rectangle {
+                                        width: 16px;
+                                        if b.has-favicon: Image {
+                                            source: b.favicon;
+                                            width: 16px; height: 16px;
+                                            image-rendering: pixelated;
+                                        }
+                                        if !b.has-favicon: Text {
+                                            text: ".";
+                                            color: b.selected ? #aaccff : #999999;
+                                            font-size: 18px;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
                                     Text { text: b.title; color: b.selected ? #ffffff : #1a1a1a;
-                                        font-size: 13px; vertical-alignment: center; width: 250px; overflow: elide; }
+                                        font-size: 13px; vertical-alignment: center; width: 234px; overflow: elide; }
                                     Text { text: b.url; color: b.selected ? #bbddff : #0055cc;
                                         font-size: 12px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+
+                                    // Check status badge
+                                    if b.check-status != "": Rectangle {
+                                        width: 30px;
+                                        background: b.check-status == "OK" ? #22aa44 : #cc2200;
+                                        border-radius: 3px;
+                                        Text {
+                                            text: b.check-status;
+                                            color: white; font-size: 10px;
+                                            horizontal-alignment: center; vertical-alignment: center;
+                                        }
+                                    }
                                 }
                             }
                         }

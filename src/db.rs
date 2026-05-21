@@ -187,6 +187,17 @@ impl Database {
 
     // ── Search ────────────────────────────────────────────────────────────────
 
+    pub fn get_all_bookmarks(&self) -> Result<Vec<DbBookmark>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, url, note FROM nodes WHERE kind='bookmark' ORDER BY title")?;
+        let mut result = Vec::new();
+        for row in stmt.query_map([], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,String>(1)?, r.get::<_,Option<String>>(2)?, r.get::<_,Option<String>>(3)?)))? {
+            let (id, title, url, note) = row?;
+            result.push(DbBookmark { id, title, url, note });
+        }
+        Ok(result)
+    }
+
     pub fn find_duplicates(&self) -> Result<Vec<DbBookmark>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, title, url, note FROM nodes WHERE kind='bookmark'

@@ -685,6 +685,34 @@ fn main() {
         ui.set_status_text(SharedString::from(format!("Загрузка favicon для {total} ссылок...")));
     }); }
 
+    // ── Show all bookmarks ────────────────────────────────────────────────────
+    { let s = state.clone(); let w = ui.as_weak();
+      ui.on_show_all(move || {
+        let ui = w.unwrap(); let mut st = s.lock().unwrap();
+        let all = st.db.get_all_bookmarks().unwrap_or_default();
+        let n = all.len();
+        st.active_folder = None; st.selected_bookmark = None;
+        let favicons = st.db.get_favicons();
+        let favicons_dir = st.favicons_dir();
+        let vec: Vec<BookmarkItem> = all.into_iter().map(|b| {
+            let fav_file = favicons.get(&b.id).cloned().unwrap_or_default();
+            let (fav_img, has_fav) = if !fav_file.is_empty() {
+                let p = favicons_dir.join(&fav_file);
+                if p.exists() { match Image::load_from_path(&p) { Ok(img) => (img, true), Err(_) => (Image::default(), false) } }
+                else { (Image::default(), false) }
+            } else { (Image::default(), false) };
+            BookmarkItem {
+                id: b.id as i32, title: SharedString::from(b.title.as_str()),
+                url: SharedString::from(b.url.as_deref().unwrap_or("")),
+                note: SharedString::from(b.note.as_deref().unwrap_or("")),
+                favicon: fav_img, has_favicon: has_fav, check_status: SharedString::default(),
+                selected: false,
+            }
+        }).collect();
+        ui.set_bookmarks(ModelRc::new(VecModel::from(vec)));
+        ui.set_folders(st.build_folder_model());
+        ui.set_status_text(SharedString::from(format!("Все ссылки: {n}"))); }); }
+
     // ── Find duplicates ───────────────────────────────────────────────────────
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_find_duplicates(move || {

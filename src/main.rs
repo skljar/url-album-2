@@ -462,6 +462,22 @@ fn main() {
         st.active_folder = Some(parent_id as i64); st.expanded.insert(parent_id as i64);
         refresh_ui(&ui, &st); ui.set_show_bookmark_dlg(true); }); }
 
+    // ctx-move: show dialog
+    { let w = ui.as_weak();
+      ui.on_ctx_move(move |id| {
+        let ui = w.unwrap();
+        ui.set_ctx_id(id);
+        ui.set_show_move_dlg(true); }); }
+
+    // ctx-move-confirm: do the move
+    { let s = state.clone(); let w = ui.as_weak();
+      ui.on_ctx_move_confirm(move |target_folder_id| {
+        let ui = w.unwrap(); let mut st = s.lock().unwrap();
+        let bm_id = ui.get_ctx_id() as i64;
+        let _ = st.db.move_node(bm_id, target_folder_id as i64);
+        st.selected_bookmark = None;
+        refresh_ui(&ui, &st); }); }
+
     { let s = state.clone();
       ui.on_ctx_copy_url(move |id| {
         let st = s.lock().unwrap();

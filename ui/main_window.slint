@@ -47,6 +47,7 @@ export component MainWindow inherits Window {
     in-out property <bool> show-bookmark-dlg: false;
     in-out property <bool> show-rename-dlg: false;
     in-out property <bool> show-edit-dlg: false;
+    in-out property <bool> show-move-dlg: false;
     in-out property <string> rename-prefill: "";
     in-out property <string> edit-title-val: "";
     in-out property <string> edit-url-val: "";
@@ -81,6 +82,8 @@ export component MainWindow inherits Window {
     callback ctx-new-sub(int);
     callback ctx-new-bm-in(int);
     callback ctx-copy-url(int);
+    callback ctx-move(int);
+    callback ctx-move-confirm(int);
 
     // Callbacks — DB & files
     callback open-db();
@@ -415,6 +418,14 @@ export component MainWindow inherits Window {
                         color: bm-copy-ta.has-hover ? #fff : #1a1a1a; vertical-alignment: center; }
                 }
 
+                if !root.ctx-is-folder: Rectangle {
+                    height: 24px; border-radius: 2px;
+                    background: bm-move-ta.has-hover ? #0078d4 : transparent;
+                    bm-move-ta := TouchArea { clicked => { root.show-ctx = false; root.ctx-move(root.ctx-id); } }
+                    Text { text: "Переместить в..."; x: 8px; font-size: 13px;
+                        color: bm-move-ta.has-hover ? #fff : #1a1a1a; vertical-alignment: center; }
+                }
+
                 // Separator
                 Rectangle { height: 1px; background: #ddd; }
 
@@ -486,6 +497,48 @@ export component MainWindow inherits Window {
                     Button { text: "Отмена"; clicked => { root.show-edit-dlg = false; } }
                     Button { text: "Сохранить"; primary: true;
                         clicked => { root.edit-confirmed(ed-ttl.text, ed-url.text, ed-note.text); root.show-edit-dlg = false; } } } }
+        }
+    }
+
+    // Move to folder dialog
+    if root.show-move-dlg: Rectangle {
+        background: #88000000;
+        TouchArea { clicked => { root.show-move-dlg = false; } }
+        Rectangle {
+            width: 320px; height: 380px; background: #fff; border-radius: 6px;
+            border-color: #ccc; border-width: 1px; drop-shadow-blur: 12px; drop-shadow-color: #30000000;
+            VerticalBox {
+                padding: 12px; spacing: 8px;
+                Text { text: "Переместить в папку"; font-size: 14px; font-weight: 700; }
+                ScrollView {
+                    vertical-stretch: 1;
+                    VerticalBox {
+                        padding: 4px; spacing: 1px; alignment: start;
+                        for f in root.folders: Rectangle {
+                            height: 24px;
+                            background: move-item-ta.has-hover ? #0078d4 : transparent;
+                            border-radius: 2px;
+                            move-item-ta := TouchArea {
+                                clicked => {
+                                    root.ctx-move-confirm(f.id);
+                                    root.show-move-dlg = false;
+                                }
+                            }
+                            HorizontalBox {
+                                padding-left: f.depth * 12px + 4px; padding-right: 4px;
+                                padding-top: 2px; padding-bottom: 2px;
+                                Text { text: f.title; font-size: 13px;
+                                    color: move-item-ta.has-hover ? #fff : #1a1a1a;
+                                    vertical-alignment: center; overflow: elide; }
+                            }
+                        }
+                    }
+                }
+                HorizontalBox {
+                    alignment: end;
+                    Button { text: "Отмена"; clicked => { root.show-move-dlg = false; } }
+                }
+            }
         }
     }
 

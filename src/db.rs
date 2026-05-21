@@ -149,6 +149,11 @@ impl Database {
         Ok(())
     }
 
+    pub fn move_node(&self, id: i64, new_parent: i64) -> Result<()> {
+        self.conn.execute("UPDATE nodes SET parent=?1 WHERE id=?2", params![new_parent, id])?;
+        Ok(())
+    }
+
     pub fn delete_bookmark(&self, id: i64) -> Result<()> {
         self.conn.execute("DELETE FROM nodes WHERE id=?1", params![id])?;
         Ok(())

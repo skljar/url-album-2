@@ -7,10 +7,12 @@
 
 ## ⚠️ Ошибка доступа
 
-Домен `forum.ru-board.com` заблокирован сетевой политикой удалённой среды выполнения (Claude Code on the web). Все попытки:
+Домен `forum.ru-board.com` недоступен из удалённой среды выполнения (Claude Code on the web):
 
-- `WebFetch` (start=860 и start=880) → HTTP 403 Forbidden
-- `curl` с User-Agent Mozilla → `Host not in allowlist`
+- `WebFetch` (start=860) → **HTTP 403 Forbidden**
+- `WebFetch` (start=880) → **HTTP 403 Forbidden**
+
+Форум блокирует автоматические запросы — требуется сессионная кука или вход через браузер.
 
 ---
 

@@ -84,6 +84,8 @@ export component MainWindow inherits Window {
     callback ctx-copy-url(int);
     callback ctx-move(int);
     callback ctx-move-confirm(int);
+    callback ctx-export-folder(int);
+    callback ctx-load-favicons-folder(int);
 
     // Callbacks — DB & files
     callback open-db();
@@ -390,6 +392,24 @@ export component MainWindow inherits Window {
                     Text { text: "+ Подпапка"; x: 8px; font-size: 13px;
                         color: ns-ta.has-hover ? #fff : #1a1a1a; vertical-alignment: center; }
                 }
+
+                if root.ctx-is-folder: Rectangle {
+                    height: 24px; border-radius: 2px;
+                    background: exp-ta.has-hover ? #0078d4 : transparent;
+                    exp-ta := TouchArea { clicked => { root.show-ctx = false; root.ctx-export-folder(root.ctx-id); } }
+                    Text { text: "Экспорт папки → HTML"; x: 8px; font-size: 13px;
+                        color: exp-ta.has-hover ? #fff : #1a1a1a; vertical-alignment: center; }
+                }
+
+                if root.ctx-is-folder: Rectangle {
+                    height: 24px; border-radius: 2px;
+                    background: favf-ta.has-hover ? #0078d4 : transparent;
+                    favf-ta := TouchArea { clicked => { root.show-ctx = false; root.ctx-load-favicons-folder(root.ctx-id); } }
+                    Text { text: "Загрузить favicon'ы"; x: 8px; font-size: 13px;
+                        color: favf-ta.has-hover ? #fff : #1a1a1a; vertical-alignment: center; }
+                }
+
+                if root.ctx-is-folder: Rectangle { height: 1px; background: #ddd; }
 
                 if root.ctx-is-folder: Rectangle {
                     height: 24px; border-radius: 2px;

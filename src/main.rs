@@ -604,6 +604,60 @@ fn main() {
             }
         } }); }
 
+    // ── Context: export folder ────────────────────────────────────────────────
+    { let s = state.clone(); let w = ui.as_weak();
+      ui.on_ctx_export_folder(move |folder_id| {
+        let ui = w.unwrap(); let st = s.lock().unwrap();
+        if let Some(path) = rfd::FileDialog::new().add_filter("HTML", &["html"]).set_file_name("folder.html").save_file() {
+            // Temporarily set active folder and export
+            let bms = st.db.get_bookmarks(folder_id as i64).unwrap_or_default();
+            let mut html = String::from("<!DOCTYPE NETSCAPE-Bookmark-file-1>\n<META HTTP-EQUIV=\"Content-Type\" CONTENT=\"text/html; charset=UTF-8\">\n<TITLE>Bookmarks</TITLE>\n<H1>Bookmarks</H1>\n<DL><p>\n");
+            let mut count = 0;
+            for b in &bms {
+                if let Some(url) = &b.url {
+                    html.push_str(&format!("    <DT><A HREF=\"{}\">{}</A>\n", url, b.title));
+                    count += 1;
+                }
+            }
+            html.push_str("</DL><p>\n");
+            match std::fs::write(&path, html.as_bytes()) {
+                Ok(_) => ui.set_status_text(SharedString::from(format!("Экспорт: {count} ссылок"))),
+                Err(e) => ui.set_status_text(SharedString::from(format!("Ошибка: {e}"))),
+            }
+        } }); }
+
+    // ── Context: load favicons for folder ─────────────────────────────────────
+    { let s = state.clone(); let w = ui.as_weak();
+      ui.on_ctx_load_favicons_folder(move |folder_id| {
+        let ui = w.unwrap();
+        let bms = { let st = s.lock().unwrap(); st.db.get_bookmarks(folder_id as i64).unwrap_or_default() };
+        let favicons_dir = { s.lock().unwrap().favicons_dir() };
+        let total = bms.len();
+        if total == 0 { return; }
+        let s2 = s.clone(); let w2 = w.clone();
+        std::thread::spawn(move || {
+            for (i, bm) in bms.into_iter().enumerate() {
+                if let Some(url) = &bm.url {
+                    if let Some(fname) = net::fetch_favicon(url, &favicons_dir) {
+                        let _ = s2.lock().unwrap().db.set_favicon(bm.id, &fname);
+                    }
+                }
+                let done = i + 1;
+                let s3 = s2.clone(); let w3 = w2.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    let ui = w3.unwrap();
+                    if done == total {
+                        let st = s3.lock().unwrap();
+                        ui.set_bookmarks(st.build_bookmark_model()); ui.set_status_text(st.status());
+                    } else {
+                        ui.set_status_text(SharedString::from(format!("Favicon: {done}/{total}...")));
+                    }
+                });
+            }
+        });
+        ui.set_status_text(SharedString::from(format!("Загрузка favicon для {total} ссылок...")));
+    }); }
+
     // ── Find duplicates ───────────────────────────────────────────────────────
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_find_duplicates(move || {

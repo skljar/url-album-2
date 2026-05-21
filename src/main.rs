@@ -199,10 +199,19 @@ fn update_detail(ui: &MainWindow, st: &State) {
     ui.set_detail_note(SharedString::default());
 }
 
+fn normalize_url(url: &str) -> String {
+    let url = url.trim();
+    if url.is_empty() { return String::new(); }
+    if url.contains("://") || url.starts_with("mailto:") { return url.to_string(); }
+    format!("https://{url}")
+}
+
 fn open_url(url: &str) {
+    let url = normalize_url(url);
+    if url.is_empty() { return; }
     use std::os::windows::process::CommandExt;
     let _ = std::process::Command::new("rundll32.exe")
-        .args(["url.dll,FileProtocolHandler", url])
+        .args(["url.dll,FileProtocolHandler", url.as_str()])
         .creation_flags(0x0800_0000).spawn();
 }
 

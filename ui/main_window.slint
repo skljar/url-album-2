@@ -115,9 +115,12 @@ export component MainWindow inherits Window {
             if e.text == Key.F2       { root.rename-requested(); return accept; }
             if e.text == Key.F4       { root.edit-requested(); return accept; }
             if e.text == Key.Return   { if root.detail-url != "" { root.bookmark-open(root.detail-url); } return accept; }
-            if e.text == Key.UpArrow  { root.bookmark-nav(-1); return accept; }
-            if e.text == Key.DownArrow{ root.bookmark-nav(1);  return accept; }
+            if e.text == Key.UpArrow   { root.bookmark-nav(-1); return accept; }
+            if e.text == Key.DownArrow { root.bookmark-nav(1);  return accept; }
+            if e.text == Key.Escape    { root.search-changed(""); search-box.text = ""; return accept; }
             if e.modifiers.control && e.text == "f" { search-box.focus(); return accept; }
+            if e.modifiers.control && !e.modifiers.shift && e.text == "n" { root.show-bookmark-dlg = true; return accept; }
+            if e.modifiers.control && e.modifiers.shift && e.text == "N" { root.show-folder-dlg = true; return accept; }
             reject
         }
 

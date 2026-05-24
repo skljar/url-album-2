@@ -5,11 +5,16 @@
 
 ⚠️ **Мониторинг недоступен: форум заблокирован на уровне сети**
 
-Доступ к `forum.ru-board.com` невозможен из облачной среды (Claude Code on the web):
+Доступ к `forum.ru-board.com` невозможен из облачной среды (Claude Code on the web).
 
-1. **WebFetch** → `HTTP 403 Forbidden` (сервер форума блокирует datacenter IP)
-2. **curl/Bash** → `Host not in allowlist` (сетевая политика контейнера не разрешает этот домен)
-3. **web.archive.org** → `Host not in allowlist` (тоже заблокирован)
+**Диагностика:**
+
+| Метод | Результат |
+|---|---|
+| WebFetch HTTPS | `HTTP 403 Forbidden` (сервер блокирует datacenter IP) |
+| curl/Bash | `Host not in allowlist` (сетевая политика контейнера) |
+| web.archive.org | `Host not in allowlist` (тоже заблокирован) |
+| WebSearch (кэш) | Кэш страниц start=860/880 не найден в поисковиках |
 
 **Проверялись URL:**
 - `https://forum.ru-board.com/topic.cgi?forum=5&topic=3250&start=860`
@@ -17,20 +22,21 @@
 
 ---
 
-### Что можно сделать
+### Как получить данные
 
-**Вариант 1 — вставить HTML вручную:**
-Открыть страницу в браузере → Ctrl+U (View Source) → скопировать HTML → вставить в чат.
-Claude разберёт и напишет полный отчёт.
+**Вариант 1 — вставить HTML вручную (быстро):**
+1. Открыть в браузере: `https://forum.ru-board.com/topic.cgi?forum=5&topic=3250&start=860`
+2. Нажать Ctrl+U (View Source) → Ctrl+A → Ctrl+C
+3. Вставить HTML в чат — Claude разберёт и напишет полный отчёт
 
 **Вариант 2 — запустить Claude Code локально:**
+Локальная версия (CLI) не имеет сетевых ограничений среды:
 ```bash
-claude "Monitor the ru-board thread..."
+claude "Monitor the ru-board thread at forum.ru-board.com/topic.cgi?forum=5&topic=3250&start=860"
 ```
-Локальная версия не имеет сетевых ограничений.
 
-**Вариант 3 — добавить домен в allowlist:**
-В настройках среды Claude Code on the web разрешить `forum.ru-board.com`:
+**Вариант 3 — добавить домен в allowlist среды:**
+В настройках Claude Code on the web разрешить `forum.ru-board.com`:
 https://code.claude.com/docs/en/claude-code-on-the-web
 
 ---

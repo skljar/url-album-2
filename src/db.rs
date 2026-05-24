@@ -1,29 +1,33 @@
 use rusqlite::{Connection, Result, params};
 use std::path::{Path, PathBuf};
 
+#[derive(Clone)]
 pub struct DbFolder {
     pub id: i64,
     pub parent_id: Option<i64>,
     pub title: String,
 }
 
+#[derive(Clone)]
 pub struct DbBookmark {
     pub id: i64,
     pub title: String,
     pub url: Option<String>,
     pub note: Option<String>,
     pub created: Option<String>,
+    pub thumb: Option<String>,
 }
 
 pub struct Database {
     conn: Connection,
+    path: PathBuf,
 }
 
 impl Database {
     pub fn open_at(path: &PathBuf) -> Result<Self> {
         let conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
-        Ok(Database { conn })
+        Ok(Database { conn, path: path.clone() })
     }
 
     pub fn open_default() -> Result<Self> {
@@ -33,6 +37,23 @@ impl Database {
     pub fn default_path() -> PathBuf {
         std::env::current_exe().unwrap_or_default()
             .parent().unwrap_or(Path::new(".")).join("album.db")
+    }
+
+    pub fn path(&self) -> &PathBuf { &self.path }
+
+    pub fn checkpoint(&self) -> Result<()> {
+        self.conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        Ok(())
+    }
+
+    pub fn clone_empty(&self) -> Self {
+        Self::open_default().unwrap_or_else(|_| panic!("DB error"))
+    }
+
+    pub fn clear(&self) -> Result<()> {
+        self.conn.execute_batch(
+            "DELETE FROM nodes; DELETE FROM sqlite_sequence WHERE name='nodes'; VACUUM;")?;
+        Ok(())
     }
 
     pub fn backup(&self, dest: &std::path::PathBuf) -> Result<()> {
@@ -54,7 +75,12 @@ impl Database {
                 sort_idx INTEGER DEFAULT 0,
                 created  TEXT DEFAULT (datetime('now'))
             );
-        ")
+        ")?;
+        // Migrations — ignore errors if column already exists
+        let _ = self.conn.execute_batch("ALTER TABLE nodes ADD COLUMN favicon TEXT;");
+        let _ = self.conn.execute_batch("ALTER TABLE nodes ADD COLUMN visited TEXT;");
+        let _ = self.conn.execute_batch("ALTER TABLE nodes ADD COLUMN thumb TEXT;");
+        Ok(())
     }
 
     // ── Folders ──────────────────────────────────────────────────────────────
@@ -112,20 +138,38 @@ impl Database {
 
     pub fn get_bookmarks(&self, folder_id: i64) -> Result<Vec<DbBookmark>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id,title,url,note,created FROM nodes WHERE parent=?1 AND kind='bookmark' ORDER BY sort_idx,title")?;
+            "SELECT id,title,url,note,created,thumb FROM nodes WHERE parent=?1 AND kind='bookmark' ORDER BY sort_idx,title")?;
         let mut result = Vec::new();
-        for row in stmt.query_map(params![folder_id], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,String>(1)?, r.get::<_,Option<String>>(2)?, r.get::<_,Option<String>>(3)?, r.get::<_,Option<String>>(4)?)))? {
-            let (id, title, url, note, created) = row?;
-            result.push(DbBookmark { id, title, url, note, created });
+        for row in stmt.query_map(params![folder_id], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,String>(1)?, r.get::<_,Option<String>>(2)?, r.get::<_,Option<String>>(3)?, r.get::<_,Option<String>>(4)?, r.get::<_,Option<String>>(5)?)))? {
+            let (id, title, url, note, created, thumb) = row?;
+            result.push(DbBookmark { id, title, url, note, created, thumb });
         }
         Ok(result)
     }
 
+    pub fn get_bookmarks_recursive(&self, folder_id: i64) -> Vec<DbBookmark> {
+        let mut result = Vec::new();
+        self.collect_bookmarks_recursive(folder_id, &mut result);
+        result
+    }
+
+    fn collect_bookmarks_recursive(&self, folder_id: i64, out: &mut Vec<DbBookmark>) {
+        if let Ok(bms) = self.get_bookmarks(folder_id) { out.extend(bms); }
+        if let Ok(mut stmt) = self.conn.prepare(
+            "SELECT id FROM nodes WHERE parent=?1 AND kind='folder'") {
+            let ids: Vec<i64> = stmt.query_map(params![folder_id], |r| r.get(0))
+                .map(|rows| rows.flatten().collect()).unwrap_or_default();
+            for sub_id in ids { self.collect_bookmarks_recursive(sub_id, out); }
+        }
+    }
+
     pub fn get_bookmark(&self, id: i64) -> Option<DbBookmark> {
+        let _ = self.conn.execute_batch("ALTER TABLE nodes ADD COLUMN thumb TEXT;");
         self.conn.query_row(
-            "SELECT id,title,url,note,created FROM nodes WHERE id=?1",
+            "SELECT id,title,url,note,created,thumb FROM nodes WHERE id=?1",
             params![id], |r| Ok(DbBookmark {
-                id: r.get(0)?, title: r.get(1)?, url: r.get(2)?, note: r.get(3)?, created: r.get(4)?
+                id: r.get(0)?, title: r.get(1)?, url: r.get(2)?, note: r.get(3)?,
+                created: r.get(4)?, thumb: r.get(5)?
             })).ok()
     }
 
@@ -140,20 +184,28 @@ impl Database {
     }
 
     pub fn set_favicon(&self, id: i64, filename: &str) -> Result<()> {
-        self.conn.execute("UPDATE nodes SET note=?1 WHERE id=?2 AND kind='bookmark'",
-            params![if filename.is_empty() { None } else { Some(filename) }, id])?;
-        // Store favicon filename in a separate way — add favicon column if not exists
         let _ = self.conn.execute_batch("ALTER TABLE nodes ADD COLUMN favicon TEXT;");
-        self.conn.execute("UPDATE nodes SET favicon=?1 WHERE id=?2", params![filename, id])?;
+        self.conn.execute("UPDATE nodes SET favicon=?1 WHERE id=?2",
+            params![if filename.is_empty() { None::<&str> } else { Some(filename) }, id])?;
         Ok(())
     }
 
     pub fn get_favicons(&self) -> std::collections::HashMap<i64, String> {
         let mut map = std::collections::HashMap::new();
-        let _ = self.conn.execute_batch("ALTER TABLE nodes ADD COLUMN favicon TEXT;");
         if let Ok(mut stmt) = self.conn.prepare(
             "SELECT id, favicon FROM nodes WHERE kind='bookmark' AND favicon IS NOT NULL AND favicon != ''") {
             let _ = stmt.query_map([], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,String>(1)?)))
+                .map(|rows| for row in rows.flatten() { map.insert(row.0, row.1); });
+        }
+        map
+    }
+
+    // Single query: bookmark count per folder (direct children only)
+    pub fn get_all_bookmark_counts(&self) -> std::collections::HashMap<i64, i64> {
+        let mut map = std::collections::HashMap::new();
+        if let Ok(mut stmt) = self.conn.prepare(
+            "SELECT parent, COUNT(*) FROM nodes WHERE kind='bookmark' AND parent IS NOT NULL GROUP BY parent") {
+            let _ = stmt.query_map([], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,i64>(1)?)))
                 .map(|rows| for row in rows.flatten() { map.insert(row.0, row.1); });
         }
         map
@@ -171,13 +223,47 @@ impl Database {
         Ok(())
     }
 
-    pub fn delete_bookmark(&self, id: i64) -> Result<()> {
-        self.conn.execute("DELETE FROM nodes WHERE id=?1", params![id])?;
+    pub fn move_item_relative(&self, id: i64, delta: i64) -> Result<()> {
+        // Get kind and parent of the item
+        let (kind, parent): (String, Option<i64>) = self.conn.query_row(
+            "SELECT kind, parent FROM nodes WHERE id=?1", params![id],
+            |r| Ok((r.get(0)?, r.get(1)?))).unwrap_or_default();
+
+        // Get all siblings of the same kind in display order
+        let mut siblings: Vec<i64> = Vec::new();
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT id FROM nodes WHERE parent IS ?1 AND kind=?2 ORDER BY sort_idx, title")?;
+            let rows = stmt.query_map(params![parent, &kind], |r| r.get::<_, i64>(0))?;
+            for row in rows.flatten() { siblings.push(row); }
+        }
+
+        let pos = match siblings.iter().position(|&x| x == id) {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+        let new_pos = pos as i64 + delta;
+        if new_pos < 0 || new_pos >= siblings.len() as i64 { return Ok(()); }
+
+        // Swap and write dense sort_idx values so order is stable
+        siblings.swap(pos, new_pos as usize);
+        for (i, &sid) in siblings.iter().enumerate() {
+            self.conn.execute("UPDATE nodes SET sort_idx=?1 WHERE id=?2", params![i as i64, sid])?;
+        }
         Ok(())
     }
 
-    pub fn bookmark_count(&self, folder_id: i64) -> i64 {
-        self.conn.query_row("SELECT COUNT(*) FROM nodes WHERE parent=?1 AND kind='bookmark'", params![folder_id], |r| r.get(0)).unwrap_or(0)
+    pub fn sort_folder(&self, folder_id: i64) -> Result<()> {
+        self.conn.execute_batch(&format!(
+            "UPDATE nodes SET sort_idx = (SELECT COUNT(*) FROM nodes n2
+             WHERE n2.parent={folder_id} AND n2.kind=nodes.kind AND LOWER(n2.title) < LOWER(nodes.title))
+             WHERE parent={folder_id}"))?;
+        Ok(())
+    }
+
+    pub fn delete_bookmark(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM nodes WHERE id=?1", params![id])?;
+        Ok(())
     }
 
     pub fn total_counts(&self) -> (i64, i64) {
@@ -194,7 +280,7 @@ impl Database {
         let mut result = Vec::new();
         for row in stmt.query_map([], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,String>(1)?, r.get::<_,Option<String>>(2)?, r.get::<_,Option<String>>(3)?)))? {
             let (id, title, url, note) = row?;
-            result.push(DbBookmark { id, title, url, note, created: None });
+            result.push(DbBookmark { id, title, url, note, created: None, thumb: None });
         }
         Ok(result)
     }
@@ -207,7 +293,7 @@ impl Database {
         let mut result = Vec::new();
         for row in stmt.query_map([], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,String>(1)?, r.get::<_,Option<String>>(2)?, r.get::<_,Option<String>>(3)?)))? {
             let (id, title, url, note) = row?;
-            result.push(DbBookmark { id, title, url, note, created: None });
+            result.push(DbBookmark { id, title, url, note, created: None, thumb: None });
         }
         Ok(result)
     }
@@ -221,7 +307,7 @@ impl Database {
         let mut result = Vec::new();
         for row in stmt.query_map(params![q], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,String>(1)?, r.get::<_,Option<String>>(2)?, r.get::<_,Option<String>>(3)?)))? {
             let (id, title, url, note) = row?;
-            result.push(DbBookmark { id, title, url, note, created: None });
+            result.push(DbBookmark { id, title, url, note, created: None, thumb: None });
         }
         Ok(result)
     }
@@ -360,71 +446,101 @@ impl Database {
 
     // ── Import from browser ───────────────────────────────────────────────────
 
-    pub fn import_chrome_json(&self, path: &Path) -> Result<usize> {
+    pub fn import_chrome_json_named(&self, path: &Path, browser_name: &str) -> Result<usize> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
+        let json: serde_json::Value = serde_json::from_str(&content)
+            .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
+        let root_id = self.create_folder(None, browser_name)?;
         let mut count = 0;
-        self.parse_chrome_node(&content, None, &mut count)?;
+        if let Some(roots) = json["roots"].as_object() {
+            for (_key, node) in roots {
+                self.import_chrome_node(node, root_id, &mut count)?;
+            }
+        }
         Ok(count)
     }
 
-    fn parse_chrome_node(&self, json: &str, parent: Option<i64>, count: &mut usize) -> Result<()> {
-        // Simple recursive JSON traversal without external JSON parser
-        // Find all "children" arrays and "url"/"name" objects
-        let mut pos = 0;
-        while pos < json.len() {
-            if let Some(idx) = json[pos..].find("\"type\": \"folder\"").or_else(|| json[pos..].find("\"type\":\"folder\"")) {
-                let start = idx + pos;
-                // Find enclosing object: scan backwards for opening {
-                let obj_start = json[..start].rfind('{').unwrap_or(0);
-                let name = extract_json_str(&json[obj_start..], "name").unwrap_or("Folder");
-                let folder_id = self.create_folder(parent, &name)?;
-                // Find children array
-                if let Some(ch_idx) = json[obj_start..].find("\"children\"") {
-                    let ch_start = obj_start + ch_idx;
-                    if let Some(arr_start) = json[ch_start..].find('[') {
-                        let arr_pos = ch_start + arr_start;
-                        // Find matching ] - simplified: just recurse on the slice
-                        let slice_end = find_matching_bracket(&json[arr_pos..]).unwrap_or(json.len() - arr_pos);
-                        self.parse_chrome_node(&json[arr_pos..arr_pos+slice_end], Some(folder_id), count)?;
+    fn import_chrome_node(&self, node: &serde_json::Value, parent: i64, count: &mut usize) -> Result<()> {
+        match node["type"].as_str().unwrap_or("") {
+            "folder" => {
+                let name = node["name"].as_str().unwrap_or("Папка");
+                let folder_id = self.create_folder(Some(parent), name)?;
+                if let Some(children) = node["children"].as_array() {
+                    for child in children {
+                        self.import_chrome_node(child, folder_id, count)?;
                     }
                 }
-                pos = start + 10;
-            } else if let Some(idx) = json[pos..].find("\"type\": \"url\"").or_else(|| json[pos..].find("\"type\":\"url\"")) {
-                let start = idx + pos;
-                let obj_start = json[..start].rfind('{').unwrap_or(0);
-                let url = extract_json_str(&json[obj_start..], "url").unwrap_or("");
-                let name = extract_json_str(&json[obj_start..], "name").unwrap_or(url);
-                if !url.is_empty() {
-                    let p = parent.unwrap_or_else(|| self.create_folder(None, "Chrome Import").unwrap_or(1));
-                    self.create_bookmark(p, &name, &url)?;
-                    *count += 1;
-                }
-                pos = start + 10;
-            } else {
-                break;
             }
+            "url" => {
+                if let Some(url) = node["url"].as_str() {
+                    if !url.is_empty() {
+                        let name = node["name"].as_str().unwrap_or(url);
+                        self.create_bookmark(parent, name, url)?;
+                        *count += 1;
+                    }
+                }
+            }
+            _ => {}
         }
         Ok(())
     }
-}
 
-fn extract_json_str<'a>(json: &'a str, key: &str) -> Option<&'a str> {
-    let needle = format!("\"{}\":", key);
-    let pos = json.find(&needle)?;
-    let after = json[pos + needle.len()..].trim_start();
-    if !after.starts_with('"') { return None; }
-    let content = &after[1..];
-    let end = content.find('"')?;
-    Some(&content[..end])
-}
-
-fn find_matching_bracket(s: &str) -> Option<usize> {
-    let mut depth = 0i32;
-    for (i, c) in s.chars().enumerate() {
-        match c { '[' => depth += 1, ']' => { depth -= 1; if depth == 0 { return Some(i + 1); } } _ => {} }
+    pub fn import_firefox(&self, places_path: &Path, browser_name: &str) -> Result<usize> {
+        let tmp     = std::env::temp_dir().join("ua3_ff_tmp.sqlite");
+        let tmp_wal = std::env::temp_dir().join("ua3_ff_tmp.sqlite-wal");
+        let tmp_shm = std::env::temp_dir().join("ua3_ff_tmp.sqlite-shm");
+        std::fs::copy(places_path, &tmp)
+            .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
+        for (ext, dst) in &[("-wal", &tmp_wal), ("-shm", &tmp_shm)] {
+            let src = format!("{}{}", places_path.to_string_lossy(), ext);
+            if std::path::Path::new(&src).exists() { let _ = std::fs::copy(&src, dst); }
+        }
+        let ff = rusqlite::Connection::open_with_flags(&tmp, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let root_ff_id: i64 = ff.query_row(
+            "SELECT id FROM moz_bookmarks WHERE parent IS NULL LIMIT 1", [], |r| r.get(0),
+        ).unwrap_or(1);
+        struct FfNode { id: i64, parent: i64, bk_type: i64, title: Option<String>, fk: Option<i64> }
+        let mut stmt = ff.prepare(
+            "SELECT id, COALESCE(parent,0), type, title, fk FROM moz_bookmarks ORDER BY parent, position",
+        )?;
+        let ff_nodes: Vec<FfNode> = stmt.query_map([], |r| Ok(FfNode {
+            id: r.get(0)?, parent: r.get(1)?, bk_type: r.get(2)?,
+            title: r.get(3)?, fk: r.get(4)?,
+        }))?.filter_map(|r| r.ok()).collect();
+        let mut pstmt = ff.prepare("SELECT id, url FROM moz_places")?;
+        let places: std::collections::HashMap<i64, String> =
+            pstmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.filter_map(|r| r.ok()).collect();
+        drop(stmt); drop(pstmt); drop(ff);
+        let _ = (std::fs::remove_file(&tmp), std::fs::remove_file(&tmp_wal), std::fs::remove_file(&tmp_shm));
+        let db_root = self.create_folder(None, browser_name)?;
+        let mut id_map: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+        id_map.insert(root_ff_id, db_root);
+        let mut count = 0;
+        for node in &ff_nodes {
+            if node.id == root_ff_id { continue; }
+            let Some(&parent_db) = id_map.get(&node.parent) else { continue };
+            match node.bk_type {
+                2 => {
+                    let title = node.title.as_deref().filter(|t| !t.is_empty()).unwrap_or("Закладки");
+                    let fid = self.create_folder(Some(parent_db), title)?;
+                    id_map.insert(node.id, fid);
+                }
+                1 => if let Some(fk) = node.fk {
+                    if let Some(url) = places.get(&fk) {
+                        if !url.starts_with("place:") {
+                            let title = node.title.as_deref().filter(|t| !t.is_empty()).unwrap_or(url.as_str());
+                            self.create_bookmark(parent_db, title, url)?;
+                            count += 1;
+                        }
+                    }
+                },
+                _ => {}
+            }
+        }
+        Ok(count)
     }
-    None
+
 }
 
 fn esc(s: &str) -> String {

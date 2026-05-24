@@ -1,37 +1,27 @@
-# Упаковка URL Album 3 для x64 и x86
-$root = "C:\Projects\url-album-3"
+# Упаковка URL Album 3 — один 32-битный exe, работает на Win7 SP1+ (x86 и x64).
+$root    = "C:\Projects\url-album-3"
+$srcExe  = "$root\target\i686-pc-windows-msvc\release\url-album-3.exe"
+$destDir = "$root\dist\URL-Album-3"
+$zipPath = "$root\dist\URL-Album-3.zip"
 
-foreach ($arch in @("x86_64-pc-windows-msvc", "i686-pc-windows-msvc")) {
-    $shortArch = if ($arch -like "*x86_64*") { "x64" } else { "x86" }
-    $srcExe    = "$root\target\$arch\release\url-album-3.exe"
-    $destDir   = "$root\dist\URL-Album-3-$shortArch"
+if (-not (Test-Path $srcExe)) {
+    Write-Error "exe not found: $srcExe"
+    Write-Host "Run: cargo build --release"
+    exit 1
+}
 
-    if (-not (Test-Path $srcExe)) {
-        Write-Host "[$shortArch] exe not found: $srcExe -- skipping"
-        continue
-    }
+New-Item -ItemType Directory -Force "$destDir\Data\favicons" | Out-Null
+Copy-Item $srcExe "$destDir\URL-Album.exe" -Force
 
-    # Копируем exe
-    Copy-Item $srcExe "$destDir\URL-Album.exe" -Force
-
-    # Создаём пустые portable-файлы/папки
-    New-Item -ItemType Directory -Force "$destDir\Data\favicons" | Out-Null
-
-    # README
-    $winNote = if ($shortArch -eq "x86") {
-        "Windows 7 SP1 / 8 / 10 / 11 (32-bit and 64-bit)"
-    } else {
-        "Windows 7 SP1 / 8 / 10 / 11 (64-bit)"
-    }
-    $readmeText = @"
+@"
 URL Album 3 - Portable Bookmark Manager
 ========================================
-Version: 3.0 ($shortArch)
+Version: 3.0 (x86 universal)
 
 Requirements:
-  $winNote
+  Windows 7 SP1 / 8 / 10 / 11 (32-bit and 64-bit)
+  Windows 7 only: Platform Update KB2670838 recommended
   No additional runtimes required (CRT is statically linked).
-  Windows 7 only: also requires Platform Update (KB2670838)
 
 Run: URL-Album.exe
 Data stored next to exe:
@@ -41,13 +31,9 @@ Data stored next to exe:
   Data\favicons\  - favicon cache
 
 Fully portable - nothing written to registry.
-"@
-    $readmeText | Out-File "$destDir\README.txt" -Encoding utf8
+"@ | Out-File "$destDir\README.txt" -Encoding utf8
 
-    # ZIP
-    $zipPath = "$root\dist\URL-Album-3-$shortArch.zip"
-    if (Test-Path $zipPath) { Remove-Item $zipPath }
-    Compress-Archive -Path "$destDir\*" -DestinationPath $zipPath
-    $size = [math]::Round((Get-Item $zipPath).Length / 1MB, 1)
-    Write-Host "[$shortArch] Done: $zipPath ($size MB)"
-}
+if (Test-Path $zipPath) { Remove-Item $zipPath }
+Compress-Archive -Path "$destDir\*" -DestinationPath $zipPath
+$size = [math]::Round((Get-Item $zipPath).Length / 1MB, 1)
+Write-Host "Done: $zipPath ($size MB)"

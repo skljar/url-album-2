@@ -1,28 +1,17 @@
-﻿URL Album 3 — Менеджер закладок
-=================================
-Версия: 3.0 alpha  |  Windows 7 SP1 / 8.1 / 10 / 11 (64-bit)
+﻿URL Album 3 - Portable Bookmark Manager
+========================================
+Version: 3.0 (x86 universal)
 
-PORTABLE — распакуй в любую папку и запусти URL-Album-3.exe.
-Ничего не устанавливается, реестр не трогается.
+Requirements:
+  Windows 7 SP1 / 8 / 10 / 11 (32-bit and 64-bit)
+  Windows 7 only: Platform Update KB2670838 recommended
+  No additional runtimes required (CRT is statically linked).
 
-ГОРЯЧИЕ КЛАВИШИ
----------------
-F4         — свойства ссылки (title, URL, заметка)
-F2         — переименовать
-Del        — удалить
-Enter      — открыть URL выбранной ссылки
-Двойной клик — открыть URL
+Run: URL-Album.exe
+Data stored next to exe:
+  album.db        - bookmark database
+  settings.json   - settings
+  recent_dbs.txt  - recent databases list
+  Data\favicons\  - favicon cache
 
-ИМПОРТ
-------
-<- ua.dat  — из старого URL Album (формат Windows-1251)
-<- HTML    — из браузера (Chrome/Firefox/Edge: Закладки -> Экспорт)
-
-ЭКСПОРТ
--------
--> HTML    — в Netscape bookmark file (открывается в браузерах)
--> TXT     — список URL + названия, разделённые табом
-
-ФАЙЛЫ РЯДОМ С EXE
------------------
-album.db   — база закладок (SQLite)
+Fully portable - nothing written to registry.

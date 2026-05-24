@@ -8,20 +8,40 @@ name = "url-album-3"
 path = "src/main.rs"
 
 [dependencies]
-slint = "1.7"
-rusqlite = { version = "0.31", features = ["bundled", "backup"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-encoding_rs = "0.8"
-rfd = "0.14"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+# Slint без winit-бэкенда → используем собственный Win32 platform (Win7+, без WinRT)
+slint        = { version = "1.7", default-features = false, features = ["std", "compat-1-2", "renderer-software"] }
+rusqlite     = { version = "0.31", features = ["bundled", "backup"] }
+serde        = { version = "1", features = ["derive"] }
+serde_json   = "1"
+encoding_rs  = "0.8"
+rfd          = "0.14"
+ureq         = { version = "2", default-features = false, features = ["tls"] }
+image        = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
+
+# Win32 API (только Win32, без WinRT) для custom platform
+[dependencies.windows-sys]
+version = "0.52"
+features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_SystemInformation",
+    "Win32_Security_Cryptography",
+]
 
 [build-dependencies]
 slint-build = "1.7"
-winres = "0.1"
+winres      = "0.1"
+
+[profile.dev]
+opt-level = 1   # basic optimization in debug builds — cuts rendering time ~5x
 
 [profile.release]
 opt-level = 3
-lto = true
-strip = true
+lto       = true
+strip     = true

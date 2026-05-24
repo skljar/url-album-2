@@ -16,9 +16,10 @@ dist/URL-Album-3/*.exe
 dist/*.zip
 dist/URL-Album-3/Data/
 
-# Temp / backup files
+# Temp / backup / log files
 *.backup
 *_CLAUDE.txt
+*.log
 
 snap.py
 seed_uadat.py

@@ -5,35 +5,34 @@
 
 ⚠️ **Мониторинг недоступен: форум заблокирован на уровне сети**
 
-Доступ к `forum.ru-board.com` невозможен из облачной среды (Claude Code on the web) по двум причинам:
+Доступ к `forum.ru-board.com` невозможен из облачной среды (Claude Code on the web):
 
-1. **WebFetch** → `HTTP 403 Forbidden` (сервер форума блокирует datacenter IP / запросы без cookies)
-2. **curl/Bash** → `Host not in allowlist` (сетевая политика контейнера не разрешает это доменное имя)
-
-Для сравнения: `github.com` доступен без проблем — ограничение именно по `forum.ru-board.com`.
+1. **WebFetch** → `HTTP 403 Forbidden` (сервер форума блокирует datacenter IP)
+2. **curl/Bash** → `Host not in allowlist` (сетевая политика контейнера не разрешает этот домен)
+3. **web.archive.org** → `Host not in allowlist` (тоже заблокирован)
 
 **Проверялись URL:**
-- `http://forum.ru-board.com/topic.cgi?forum=5&topic=3250&start=860`
-- `http://forum.ru-board.com/topic.cgi?forum=5&topic=3250&start=880`
+- `https://forum.ru-board.com/topic.cgi?forum=5&topic=3250&start=860`
+- `https://forum.ru-board.com/topic.cgi?forum=5&topic=3250&start=880`
 
 ---
 
 ### Что можно сделать
 
-**Вариант 1 — вручную скопировать HTML страницы:**
-- Открыть страницу в браузере
-- Нажать Ctrl+U (View Source) и скопировать весь HTML
-- Вставить текст в сообщение Claude — разберу и напишу отчёт
+**Вариант 1 — вставить HTML вручную:**
+Открыть страницу в браузере → Ctrl+U (View Source) → скопировать HTML → вставить в чат.
+Claude разберёт и напишет полный отчёт.
 
-**Вариант 2 — RSS лента форума:**
+**Вариант 2 — запустить Claude Code локально:**
+```bash
+claude "Monitor the ru-board thread..."
 ```
-http://forum.ru-board.com/rss.cgi?forum=5&topic=3250
-```
-Если форум отдаёт RSS без авторизации — можно подключить к Zapier/IFTTT.
+Локальная версия не имеет сетевых ограничений.
 
-**Вариант 3 — локальный запуск Claude Code:**
-Запустить `claude` локально (на своей машине), там сетевых ограничений нет.
+**Вариант 3 — добавить домен в allowlist:**
+В настройках среды Claude Code on the web разрешить `forum.ru-board.com`:
+https://code.claude.com/docs/en/claude-code-on-the-web
 
 ---
 
-*Данные недоступны из облачной среды*
+*Данные недоступны из облачной среды на 2026-05-24*

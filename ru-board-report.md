@@ -11,14 +11,19 @@
 
 | Метод | Результат |
 |---|---|
-| WebFetch HTTPS | `HTTP 403 Forbidden` (сервер блокирует datacenter IP) |
-| curl/Bash | `Host not in allowlist` (сетевая политика контейнера) |
-| web.archive.org | `Host not in allowlist` (тоже заблокирован) |
-| WebSearch (кэш) | Кэш страниц start=860/880 не найден в поисковиках |
+| WebFetch `start=860` | `HTTP 403 Forbidden` (сервер блокирует datacenter IP) |
+| WebFetch `start=880` | `HTTP 403 Forbidden` |
+| WebFetch зеркало ru-board.club | `HTTP 403 Forbidden` |
+| WebFetch HTTP (не HTTPS) | `HTTP 403 Forbidden` |
+| Wayback Machine | `Host not in allowlist` (заблокирован политикой контейнера) |
+| WebSearch (Google кэш) | Кэш страниц start=860/880 не найден в поисковиках |
 
 **Проверялись URL:**
 - `https://forum.ru-board.com/topic.cgi?forum=5&topic=3250&start=860`
 - `https://forum.ru-board.com/topic.cgi?forum=5&topic=3250&start=880`
+- `https://ru-board.club/computers/soft/6220-24.html`
+
+**Вероятная причина:** ru-board.com закрывает доступ с IP-адресов дата-центров (не-российские / не-резидентские IP). Сессионные cookies не помогут — блок на сетевом уровне.
 
 ---
 
@@ -30,7 +35,7 @@
 3. Вставить HTML в чат — Claude разберёт и напишет полный отчёт
 
 **Вариант 2 — запустить Claude Code локально:**
-Локальная версия (CLI) не имеет сетевых ограничений среды:
+Локальная версия (CLI) не имеет сетевых ограничений:
 ```bash
 claude "Monitor the ru-board thread at forum.ru-board.com/topic.cgi?forum=5&topic=3250&start=860"
 ```
@@ -41,4 +46,4 @@ https://code.claude.com/docs/en/claude-code-on-the-web
 
 ---
 
-*Данные недоступны из облачной среды на 2026-05-24*
+*Данные недоступны из облачной среды на 2026-05-24. Повторить после решения проблемы с доступом.*

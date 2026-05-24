@@ -1,0 +1,11 @@
+# Основной target: 32-битный exe, работает на Win7 SP1+ (x86 и x64 через WoW64).
+[build]
+target = "i686-pc-windows-msvc"
+
+# Статическая линковка MSVC CRT — программа не зависит от VCRUNTIME140.dll
+# и api-ms-win-crt-*.dll, всё встроено в exe.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.i686-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

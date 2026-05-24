@@ -10,6 +10,16 @@ dist/URL-Album-3/*.db-*
 dist/URL-Album-3/*.txt
 dist/URL-Album-3/*.json
 dist/URL-Album-3.0-alpha/
+
+# Build artifacts — exe, zip, favicon cache
+dist/URL-Album-3/*.exe
+dist/*.zip
+dist/URL-Album-3/Data/
+
+# Temp / backup files
+*.backup
+*_CLAUDE.txt
+
 snap.py
 seed_uadat.py
 test_*.py

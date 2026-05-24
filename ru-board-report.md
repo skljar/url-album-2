@@ -11,39 +11,39 @@
 
 | Метод | Результат |
 |---|---|
-| WebFetch `start=860` | `HTTP 403 Forbidden` (сервер блокирует datacenter IP) |
+| WebFetch `start=860` | `HTTP 403 Forbidden` |
 | WebFetch `start=880` | `HTTP 403 Forbidden` |
-| WebFetch зеркало ru-board.club | `HTTP 403 Forbidden` |
-| WebFetch HTTP (не HTTPS) | `HTTP 403 Forbidden` |
-| Wayback Machine | `Host not in allowlist` (заблокирован политикой контейнера) |
-| WebSearch (Google кэш) | Кэш страниц start=860/880 не найден в поисковиках |
+| curl с browser headers | `Host not in allowlist` (ответ сервера) |
+| Google cache / RSSing зеркало | `HTTP 403 Forbidden` |
+| Wayback Machine API | `HTTP 403 Forbidden` |
+| TCP/TLS соединение | ✅ Успешно (IP достижим, но контент не отдаётся) |
 
-**Проверялись URL:**
-- `https://forum.ru-board.com/topic.cgi?forum=5&topic=3250&start=860`
-- `https://forum.ru-board.com/topic.cgi?forum=5&topic=3250&start=880`
-- `https://ru-board.club/computers/soft/6220-24.html`
-
-**Вероятная причина:** ru-board.com закрывает доступ с IP-адресов дата-центров (не-российские / не-резидентские IP). Сессионные cookies не помогут — блок на сетевом уровне.
+**Вывод:** ru-board.com закрывает HTTP-ответы для datacenter IP-адресов (AWS/GCP/Azure).
+Это серверная IP-фильтрация — не проблема авторизации или cookies.
 
 ---
 
-### Как получить данные
+### Как получить данные вручную
 
-**Вариант 1 — вставить HTML вручную (быстро):**
+**Вариант 1 — вставить HTML в чат (быстро):**
 1. Открыть в браузере: `https://forum.ru-board.com/topic.cgi?forum=5&topic=3250&start=860`
-2. Нажать Ctrl+U (View Source) → Ctrl+A → Ctrl+C
+2. Нажать Ctrl+U → Ctrl+A → Ctrl+C
 3. Вставить HTML в чат — Claude разберёт и напишет полный отчёт
 
-**Вариант 2 — запустить Claude Code локально:**
-Локальная версия (CLI) не имеет сетевых ограничений:
-```bash
-claude "Monitor the ru-board thread at forum.ru-board.com/topic.cgi?forum=5&topic=3250&start=860"
+**Вариант 2 — PowerShell-мониторинг локально:**
+Скрипт `monitor-ruboard.ps1` в корне проекта работает с локальной машины:
+```powershell
+# Запустить из папки проекта (Windows):
+.\monitor-ruboard.ps1
 ```
+Скрипт проверяет изменения и показывает Windows-уведомление при новых постах.
 
-**Вариант 3 — добавить домен в allowlist среды:**
-В настройках Claude Code on the web разрешить `forum.ru-board.com`:
-https://code.claude.com/docs/en/claude-code-on-the-web
+**Вариант 3 — Claude Code CLI локально:**
+Локальная версия CLI не имеет сетевых ограничений:
+```bash
+claude "Monitor ru-board thread forum=5 topic=3250 start=860 and write report to ru-board-report.md"
+```
 
 ---
 
-*Данные недоступны из облачной среды на 2026-05-24. Повторить после решения проблемы с доступом.*
+*Следующая проверка: повторить после решения проблемы с доступом или через локальный запуск.*

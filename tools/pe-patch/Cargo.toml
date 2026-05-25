@@ -1,0 +1,17 @@
+[package]
+name = "pe-patch"
+version = "0.1.0"
+edition = "2021"
+
+# Standalone host utility — not part of the main project's workspace.
+# Build: cargo build (from tools/pe-patch/) → x86_64 host binary
+# Usage: cargo run -- <path-to-i686-exe>
+[workspace]
+
+[[bin]]
+name = "pe-patch"
+path = "src/main.rs"
+
+[dependencies]
+object = { version = "0.36", default-features = false, features = ["read"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

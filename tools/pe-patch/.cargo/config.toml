@@ -1,0 +1,5 @@
+# Override the root .cargo/config.toml that forces i686-pc-windows-msvc.
+# This tool is a host utility — it runs on the Win10 build machine (x86_64)
+# and patches the 32-bit target binary. No reason to cross-compile it to i686.
+[build]
+target = "x86_64-pc-windows-msvc"

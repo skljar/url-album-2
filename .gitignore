@@ -1,4 +1,6 @@
 /target
+/tools/pe-patch/target
+/tools/pe-patch/backups
 *.db
 *.db-shm
 *.db-wal

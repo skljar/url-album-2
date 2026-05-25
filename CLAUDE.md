@@ -247,15 +247,80 @@ struct State {
 - `cargo build --release` → `URL-Album.exe` 14 MB (i686), ZIP 6 MB
 - **Тест запуска на Win10: ✅ пройден успешно**
 
-#### ⏳ Следующие шаги
-- Тестирование на реальной **Windows 7 SP1** (с KB2670838) — проверить:
-  - Запуск exe
-  - Файловые диалоги (rfd — IFileDialog, Vista+)
-  - Favicon загрузку (ureq + rustls)
-- Проверка и доработка функциональности (баги при использовании)
-- Планирование браузерных расширений:
-  - **Native Messaging** (прямая интеграция с браузером, сложнее) vs
-  - **HTTP-сервер** внутри exe (проще, браузерно-независимо)
+#### ⏳ Следующие шаги → перешли в сессию 2026-05-25
+
+---
+
+### Сессия 2026-05-25 — диагностика Win7 крэшей, pe-patch, анализ delay-load
+
+#### ✅ Сделано
+- Удалена функция `favicon_log()` из `net.rs` (убрано создание `favicon_debug.log`)
+- Создан инструмент `tools/pe-patch/` — PE binary patcher для Win7-совместимости:
+  - Переименовывает `GetSystemTimePreciseAsFileTime` → `GetSystemTimeAsFileTime` в INT
+  - Обнуляет 2-байтовый HINT перед именем (0x027F → 0x0000)
+  - Обнуляет PE CheckSum (был уже 0 из-за strip=true)
+  - Создаёт timestamped backup в `tools/pe-patch/backups/`
+  - Отдельный workspace, собирается под x86_64 host (не i686)
+- **Win7 крэш #1 диагностирован и исправлен**: `GetSystemTimePreciseAsFileTime` не найдена в kernel32.dll Win7 — жёсткая запись в PE import table от Rust 1.95 libstd. PE-патч переименовывает импорт → Win7 загружает exe
+- **Win7 крэш #2 диагностирован**: `STATUS_DELAY_LOAD_FAILURE` (c06d007f) — cdb.exe дал ответ:
+  - Падает на `bcryptprimitives.dll` → функция `ProcessPrng` (ordinal 1)
+  - Delay-load thunk стреляет вместо нашего `__imp_ProcessPrng` шима
+  - **Корень проблемы**: MSVC linker обрабатывает `/DELAYLOAD` ПОСЛЕ разрешения `/FORCE:MULTIPLE`, записывая адрес thunk'а в IAT-слот поверх нашего шима
+- **Win10 baseline**: `cargo build --release` → pe-patch → exe запускается ✅
+
+#### ⏳ Следующий шаг — реализовать `__pfnDliFailureHook2` в `src/compat.rs`
+
+Это официальный MSVC механизм перехвата delay-load failures. Принцип:
+1. Delay-load thunk пытается `LoadLibrary("bcryptprimitives.dll")` → fails on Win7
+2. Хук `dliFailLoadLib (=3)` → возвращаем fake HMODULE (ненулевой)
+3. Thunk пытается `GetProcAddress(fake_hmod, "ProcessPrng")` → fails
+4. Хук `dliFailGetProc (=4)` → возвращаем адрес `compat_ProcessPrng`
+5. Thunk записывает шим в IAT-слот → все последующие вызовы к шиму
+
+**Критические детали для реализации:**
+
+```
+SYMBOL NAME: ___pfnDliFailureHook2  (ТРИ подчёркивания)
+  На i686-pc-windows-msvc MSVC C-код в delayimp.lib ищет символ с leading
+  underscore (cdecl ABI). #[no_mangle] Rust не добавляет это '_' автоматически.
+  Решение: #[export_name = "___pfnDliFailureHook2"]
+  ИЛИ: build.rs → /ALTERNATENAME:___pfnDliFailureHook2=__pfnDliFailureHook2
+
+ORDINAL vs NAME check в shim_for_proc:
+  proc_raw <= 0xFFFF → это ordinal (ProcessPrng = ordinal 1)
+  proc_raw > 0xFFFF  → это *const u8 указатель на строку
+
+ENUM dliNotification из <delayimp.h>:
+  dliFailLoadLib  = 3
+  dliFailGetProc  = 4
+  (dliNotePreLoadLibrary = 1, dliNotePreGetProcAddress = 2 — не используем)
+
+build.rs: /DELAYLOAD директивы ОСТАВИТЬ — хук их перехватывает
+
+МЭППИНГ функций:
+  bcryptprimitives.dll   ord 1 / "ProcessPrng"          → compat_ProcessPrng
+  api-ms-win-core-synch  "WaitOnAddress"                 → compat_WaitOnAddress
+  api-ms-win-core-synch  "WakeByAddressAll"              → compat_WakeByAddressAll
+  api-ms-win-core-synch  "WakeByAddressSingle"           → compat_WakeByAddressSingle
+  api-ms-win-core-winrt  "RoOriginateErrorW"             → compat_RoOriginateErrorW
+  combase.dll            "CoTaskMemFree"                 → compat_CoTaskMemFree
+  combase.dll            "CoCreateFreeThreadedMarshaler" → compat_CoCreateFreeThreadedMarshaler
+```
+
+**Перед сборкой** — проверить exact symbol name в delayimp.lib:
+```powershell
+dumpbin /SYMBOLS "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\lib\x86\delayimp.lib" | Select-String "pfnDli"
+```
+
+**После сборки** — проверить нет ли warning "static is not used" (плохой знак = linker не видит хук).
+
+#### 🔧 Диагностические артефакты
+- `cdb.exe`: `C:\Program Files (x86)\Windows Kits\10\Debuggers\x86\cdb.exe`
+- Crash dump: `C:\Users\admin\Documents\URL-Album.exe.2336.dmp` (44 MB)
+- cdb-анализ показал: `Parameter[0] = 0x002de4dc` → `DelayLoadInfo.szDll = "bcryptprimitives.dll"`, `dlp.raw = 1`
+- Win7 VM: VirtualBox, dist → `Desktop\URL-Album-3\URL-Album.exe`
+- Crash dumps в Win7: `C:\CrashDumps\` (registry настроен, WER включён)
 
 #### 🐛 Известные проблемы
-- rfd 0.14 на Win7 не тестировался практически (теоретически должно работать)
+- Win7: `STATUS_DELAY_LOAD_FAILURE` на `ProcessPrng` — БУДЕТ FIX в следующей сессии
+- rfd 0.14 на Win7 не тестировался (теоретически должно работать — IFileDialog Vista+)

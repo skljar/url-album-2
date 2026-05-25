@@ -324,3 +324,68 @@ dumpbin /SYMBOLS "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Too
 #### 🐛 Известные проблемы
 - Win7: `STATUS_DELAY_LOAD_FAILURE` на `ProcessPrng` — БУДЕТ FIX в следующей сессии
 - rfd 0.14 на Win7 не тестировался (теоретически должно работать — IFileDialog Vista+)
+
+---
+
+### Сессия 2026-05-25 (продолжение) — диагностика hook'а
+
+#### Что было сделано
+1. **PE-patch для GetSystemTimePreciseAsFileTime — РАБОТАЕТ** (commit fba8f41 ранее)
+2. Реализован hook `__pfnDliFailureHook2` в src/compat.rs через `#[export_name = "___pfnDliFailureHook2"]` + `/INCLUDE:___pfnDliFailureHook2` в build.rs
+3. На Win10 — exe запускается, hook не ломает нормальный путь
+4. На Win7 — три попытки тестирования, все упали с APPCRASH
+
+#### Ключевые находки из cdb анализа
+
+**Crash dump 1724 (тест с константами 3/4):**
+- Код ошибки: c06d007f (STATUS_DELAY_LOAD_FAILURE)
+- DelayLoadInfo: szDll = "bcryptprimitives.dll", proc = "ProcessPrng"
+- hmodCur = 0x73740000 — НАШ hook вернул HMODULE для какого-то notify
+- pfnCur = 0 — для другого notify вернул 0 → crash
+- Disasm в этом dump'е интерпретирован НЕВЕРНО: думали push 4 для LoadLib и push 5 для GetProc
+
+**Crash dump 2880 (тест с константами 4/5):**
+- Тот же код c06d007f
+- Disasm ПРАВИЛЬНО показал: **push 3 = dliFailLoadLib**, **push 4 = dliFailGetProc**
+- Это совпадает с delayimp.h — стандартные значения 3 и 4 правильные
+- `dd 01f70b40 L1 = 00000000` — **hook-pointer был NULL** в этой сборке
+- Значит hook вообще не подключился в сборке с константами 4/5
+
+#### Архитектурные тупики (НЕ применять снова)
+- ❌ Runtime registration через `extern static __pfnDliFailureHook2` — переменная в **read-only странице** (.rdata/.didata), запись вызывает access violation в init()
+- ❌ Константы 4/5 в DLI_FAIL_* — НЕВЕРНЫЕ, правильные 3 и 4
+
+#### ПРАВИЛЬНЫЕ значения констант
+```rust
+const DLI_FAIL_LOAD_LIB: u32 = 3;  // подтверждено delayimp.h + dump 2880 disasm
+const DLI_FAIL_GET_PROC:  u32 = 4;  // подтверждено delayimp.h + dump 2880 disasm
+```
+
+#### Открытые вопросы для следующей сессии
+1. **Подключается ли hook вообще** — в первом dump'е 1724 hmodCur=0x73740000 говорит что да, но во втором dump'е 2880 hook-pointer = NULL. Между этими тестами были разные сборки. Нужно проверить через cdb на свежем exe.
+2. **Если /FORCE:MULTIPLE создаёт дубликат symbol** — наш `___pfnDliFailureHook2` static может оказаться по одному адресу, а delayimp читает другой (NULL). Возможные решения:
+   - Использовать `/WHOLEARCHIVE:delayimp.lib` чтобы заставить линкер брать только наш symbol
+   - Вынести hook в отдельный crate без LTO
+   - Использовать `/INCLUDE` + проверить через `dumpbin /SYMBOLS` что наш symbol победил
+3. **Calling convention** — `extern "system"` правильно для i686, но возможно нужно явно `extern "stdcall"`
+
+#### ПЛАН ДЛЯ СЛЕДУЮЩЕЙ СЕССИИ
+
+**Вариант А — Дожать hook (попробовать первым):**
+1. Восстановить hook-блок в compat.rs с **КОНСТАНТАМИ 3 и 4** (правильными)
+2. Восстановить `/INCLUDE:___pfnDliFailureHook2` в build.rs
+3. `cargo build --release`
+4. **Проверить hook-pointer через cdb/dumpbin** — если pointer = NULL → hook не подключился
+5. pe-patch → ZIP → Win7 тест
+6. Если crash на ProcessPrng — hook не сработал; если на другой функции — расширить shim_for
+
+**Вариант Б — Plan B (если А не работает за 1 час):**
+- Расширить tools/pe-patch для подмены имён функций в delay-load таблице (надёжнее, без зависимости от linker symbol resolution)
+
+#### Обязательно сделать ПЕРВЫМ делом в следующей сессии
+1. Прочитать этот раздел CLAUDE.md ПОЛНОСТЬЮ
+2. Прочитать src/compat.rs и build.rs текущее состояние
+3. **НЕ повторять ошибки этой сессии**:
+   - НЕ менять константы DLI_FAIL_* на 4/5
+   - НЕ пытаться runtime-registration через extern static
+4. Начать с проверки реального состояния hook-pointer через cdb/dumpbin на свежей сборке

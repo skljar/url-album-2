@@ -118,21 +118,10 @@ fn try_get(url: &str) -> Option<Vec<u8>> {
             let mut buf = Vec::new();
             match resp.into_reader().read_to_end(&mut buf) {
                 Ok(_) => Some(buf),
-                Err(e) => { favicon_log(&format!("read error {url}: {e}")); None }
+                Err(_) => None,
             }
         }
-        Err(e) => { favicon_log(&format!("get error {url}: {e}")); None }
-    }
-}
-
-pub fn favicon_log(msg: &str) {
-    let path = std::env::current_exe().ok()
-        .and_then(|p| p.parent().map(|d| d.join("favicon_debug.log")));
-    if let Some(path) = path {
-        use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-            let _ = writeln!(f, "{msg}");
-        }
+        Err(_) => None,
     }
 }
 

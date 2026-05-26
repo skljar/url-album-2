@@ -89,11 +89,11 @@ Data\favicons\    ← кэш favicon
 
 ## Отличие от URL Album 2
 
-| | URL Album 2 | URL Album 3 |
+| | URL Album 2 | URL Album 2.0.1 |
 |---|---|---|
 | Минимальная ОС | Windows 10 | Windows 7 SP1 |
 | Движок UI | WebView2 (Edge) | Slint (свой) |
-| Скриншоты | Edge/Chrome headless | — (в разработке) |
+| Скриншоты | Edge/Chrome headless | — (не реализованы) |
 | Размер | 3.7 МБ | 6.5 МБ |
 
 ---

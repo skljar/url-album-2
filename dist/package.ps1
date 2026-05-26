@@ -1,29 +1,27 @@
-# Упаковка URL Album 3 — один 32-битный exe, работает на Win7 SP1+ (x86 и x64).
+# Упаковка URL Album — один 32-битный exe, работает на Win7 SP1+ (x86 и x64).
+$version = "2.0.1"
 $root    = "C:\Projects\url-album-3"
 $srcExe  = "$root\target\i686-pc-windows-msvc\release\url-album-3.exe"
-$destDir = "$root\dist\URL-Album-3"
-$zipPath = "$root\dist\URL-Album-3.zip"
+$destDir = "$root\dist\URL-Album-$version"
+$zipPath = "$root\dist\URL-Album-$version.zip"
 
 if (-not (Test-Path $srcExe)) {
     Write-Error "exe not found: $srcExe"
-    Write-Host "Run: cargo build --release"
+    Write-Host "Run: cargo build --release && pe-patch"
     exit 1
 }
 
 New-Item -ItemType Directory -Force "$destDir\Data\favicons" | Out-Null
-Copy-Item $srcExe "$destDir\URL-Album.exe" -Force
+Copy-Item $srcExe "$destDir\URL-Album-$version.exe" -Force
 
 @"
-URL Album 3 - Portable Bookmark Manager
-========================================
-Version: 3.0 (x86 universal)
-
+URL Album $version - Portable Bookmark Manager
+===============================================
 Requirements:
   Windows 7 SP1 / 8 / 10 / 11 (32-bit and 64-bit)
-  Windows 7 only: Platform Update KB2670838 recommended
   No additional runtimes required (CRT is statically linked).
 
-Run: URL-Album.exe
+Run: URL-Album-$version.exe
 Data stored next to exe:
   album.db        - bookmark database
   settings.json   - settings

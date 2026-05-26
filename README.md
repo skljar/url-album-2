@@ -8,9 +8,9 @@
 
 ## Скачать
 
-**[URL-Album-3.0-alpha.zip](dist/URL-Album-3.0-alpha.zip)** — 6.5 МБ, portable
+**[Релиз v2.0.1 на GitHub](https://github.com/skljar/url-album-2/releases/latest)** — ≈6.5 МБ, portable
 
-Распакуй и запусти `URL-Album-3.exe`. Ничего не устанавливается.
+Распакуй и запусти `URL-Album-2.0.1.exe`. Ничего не устанавливается.
 
 ---
 
@@ -71,14 +71,14 @@
 
 ## Установка
 
-1. Скачайте ZIP
+1. Скачайте ZIP со [страницы релизов](https://github.com/skljar/url-album-2/releases/latest)
 2. Распакуйте в любую папку
-3. Запустите `URL-Album-3.exe`
+3. Запустите `URL-Album-2.0.1.exe`
 
 ### Файлы рядом с exe
 
 ```
-URL-Album-3.exe
+URL-Album-2.0.1.exe
 album.db          ← база закладок
 settings.json     ← ширина панели
 last_db.txt       ← последняя открытая база

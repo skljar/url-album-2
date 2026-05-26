@@ -7,16 +7,9 @@
 last_db.txt
 recent_dbs.txt
 settings.json
-dist/URL-Album-3/*.db
-dist/URL-Album-3/*.db-*
-dist/URL-Album-3/*.txt
-dist/URL-Album-3/*.json
-dist/URL-Album-3.0-alpha/
-
-# Build artifacts — exe, zip, favicon cache
-dist/URL-Album-3/*.exe
+# dist build artifacts — versioned dirs, zip, exe, data files
+dist/URL-Album-*/
 dist/*.zip
-dist/URL-Album-3/Data/
 
 # Temp / backup / log files
 *.backup

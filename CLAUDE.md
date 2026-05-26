@@ -1,5 +1,52 @@
 # URL Album 3 — CLAUDE.md
 
+## Правила версионирования и релизов
+
+### Текущая версия
+**2.0.1**
+
+### Формат версий
+Семантическое: MAJOR.MINOR.PATCH (например 2.0.1).
+- PATCH (+1 к третьему числу): исправление багов
+- MINOR (+1 ко второму, PATCH обнуляется): новая функциональность
+- MAJOR (+1 к первому): ломающие изменения, только с согласия
+
+### Имена файлов
+Все артефакты релиза по шаблону `URL-Album-<version>`:
+- ZIP в dist/: `URL-Album-2.0.1.zip`
+- EXE внутри ZIP: `URL-Album-2.0.1.exe`
+- Tag релиза в Git: `v2.0.1`
+
+### Места, где должна стоять одна и та же версия
+- `Cargo.toml` → `version = "2.0.1"`
+- `README.md` → ссылка на скачивание
+- `dist/package.ps1` → имя ZIP и EXE
+- `CLAUDE.md` → эта секция (текущая версия выше)
+- Git tag: `v2.0.1`
+
+### Рабочий процесс сборки дистрибутива
+```powershell
+# 1. Сборка
+cargo build --release
+
+# 2. PE-patch (Win7: GetSystemTimePreciseAsFileTime + bcrypt ordinal + synch IAT)
+cargo run --manifest-path tools\pe-patch\Cargo.toml --release -- `
+    target\i686-pc-windows-msvc\release\url-album-3.exe
+
+# 3. Упаковка
+.\dist\package.ps1
+# → dist\URL-Album-2.0.1.zip (≈6.5 MB)
+
+# 4. Релиз
+gh release create v2.0.1 .\dist\URL-Album-2.0.1.zip `
+    --repo skljar/url-album-2 `
+    --title "URL-Album 2.0.1 — Win7 compat fix" `
+    --notes-file release_notes.md `
+    --latest
+```
+
+---
+
 Portable bookmark manager. **Windows 7 SP1+ (32-bit exe, работает на x86 и x64)**. Духовный наследник URL Album 2, но на Slint вместо Tauri/WebView2.
 
 > Target: `i686-pc-windows-msvc` (32-bit). Один exe покрывает Win7/8/10/11 × x86/x64 через WoW64.

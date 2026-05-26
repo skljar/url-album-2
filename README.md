@@ -1,4 +1,4 @@
-# URL Album 2
+# URL Album 2.1
 
 **Portable менеджер закладок для Windows 7 SP1 / 8.1 / 10 / 11**
 

@@ -515,3 +515,42 @@ $dumpbin = "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSV
 #### ⏳ Возможные следующие шаги
 - Предупреждения компилятора: `non_snake_case` в pe-patch (BCRYPT/CBASE locals) — косметика
 - `api-ms-win-core-winrt-error-l1-1-0.dll` и `combase.dll` — delay-loaded, но не падают в текущих тестах (возможно не вызываются в типичных сценариях Win7). Если упадут — применить ту же IAT-patch технику.
+
+---
+
+### Сессия 2026-05-26 (продолжение, поздний вечер) — релиз v2.0.2
+
+#### Что выпущено
+- v2.0.2: https://github.com/skljar/url-album-2/releases/tag/v2.0.2
+- ZIP: `URL-Album-2.0.2.zip` (~6 MB), прикреплён к релизу, помечен Latest
+- v2.0.1 сохранён как историческая версия (не удалён)
+
+#### Какой баг чинили
+- **Симптом**: на Win7 SP1 x64 крэш `c06d007e` (ERROR_MOD_NOT_FOUND) при импорте базы данных
+- **Корень**: `combase.dll` отсутствует на Win7 — функции `CoTaskMemFree` и `CoCreateFreeThreadedMarshaler` живут там в `ole32.dll`
+- **Диагностика**: cdb dump → `dc <Param0> L9; da poi(<Param0>+c)` → `DelayLoadInfo.szDll = "combase.dll"`, `szProcName = "CoTaskMemFree"`
+
+#### Что добавлено в этой сессии
+
+| Компонент | Изменение |
+|---|---|
+| `src/compat.rs` | `#[no_mangle] pub` на `compat_CoTaskMemFree` и `compat_CoCreateFreeThreadedMarshaler` |
+| `build.rs` | `/EXPORT:compat_CoTaskMemFree`, `/EXPORT:compat_CoCreateFreeThreadedMarshaler` |
+| `tools/pe-patch/src/main.rs` | новая функция `patch_combase_iat()` — IAT шим (ole32.dll runtime load) |
+
+#### Тестировано в этой сессии
+- Win7 SP1 x64 VirtualBox: старт ✅, UI ✅, фавиконы ✅, импорт базы ✅
+- Win10 x64: smoke test ✅
+
+#### WER LocalDumps настроены для exe
+- `URL-Album-2.0.1.exe` → `C:\CrashDumps\`
+- `URL-Album-2.0.2.exe` → `C:\CrashDumps\` (на Win7 VM)
+
+#### Что в очереди (если упадёт в следующих сессиях)
+- `api-ms-win-core-winrt-error-l1-1-0.dll` — пока не падает, но если упадёт — IAT-патч по той же схеме (`RoOriginateError*` шимы уже есть в `compat.rs`)
+- Расширения для браузеров (Chrome/Firefox/Edge/Opera) — следующий большой этап
+
+#### Уроки сессии
+- Heredoc-синтаксис bash `$(cat <<'EOF' ... EOF)` НЕ работает в PowerShell — использовать многократный `-m` или here-string `@"..."@`
+- `gh` CLI и `git` имеют разные credentials — `gh auth login` нужно делать ИНТЕРАКТИВНО в отдельном PowerShell (Claude Code не может это запустить)
+- При rebase из remote всегда возможны merge-конфликты в README — наша актуальная версия побеждает

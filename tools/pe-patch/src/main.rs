@@ -150,7 +150,12 @@ fn main() {
         eprintln!("Warning: synch IAT patch failed or not needed");
     }
 
-    // ── 10. Write patched binary ──────────────────────────────────────────────
+    // ── 10. Patch combase IAT: CoTaskMemFree/CoCreateFTM → compat shims ─────
+    if !patch_combase_iat(&mut data) {
+        eprintln!("Warning: combase IAT patch failed or not needed");
+    }
+
+    // ── 11. Write patched binary ──────────────────────────────────────────────
     fs::write(&path, &data).expect("cannot write patched file");
     println!("Done:     {}", path.display());
 }
@@ -483,6 +488,129 @@ fn patch_synch_iat(data: &mut Vec<u8>) -> bool {
     }
 
     eprintln!("api-ms-win-core-synch-l1-2-0.dll not found in delay-load directory");
+    false
+}
+
+/// Patches the delay-load IAT for combase.dll so that CoTaskMemFree and
+/// CoCreateFreeThreadedMarshaler jump directly to the compat shims in the exe.
+///
+/// combase.dll does not exist on Win7 (those functions live in ole32.dll there).
+/// Same IAT-bypass technique as patch_synch_iat: pre-patch the IAT slot with the
+/// shim VA so the first CALL [IAT] goes straight to the shim, never reaching the
+/// delay-load thunk or LoadLibrary("combase.dll").
+fn patch_combase_iat(data: &mut Vec<u8>) -> bool {
+    const SHIMS: [(&[u8], &[u8]); 2] = [
+        (b"CoTaskMemFree",                b"compat_CoTaskMemFree"),
+        (b"CoCreateFreeThreadedMarshaler", b"compat_CoCreateFreeThreadedMarshaler"),
+    ];
+
+    let mut shim_vas = [0u32; 2];
+    for (i, (_, shim_name)) in SHIMS.iter().enumerate() {
+        match find_export_va(data, shim_name) {
+            Some(va) => {
+                println!("  Export {}: VA=0x{va:08X}", s(shim_name));
+                shim_vas[i] = va;
+            }
+            None => {
+                eprintln!("Export '{}' not found — /EXPORT: missing in build.rs?", s(shim_name));
+                return false;
+            }
+        }
+    }
+
+    let e_lfanew   = read_u32(data, 0x3C) as usize;
+    let image_base = read_u32(data, e_lfanew + 24 + 28);
+    let opt_off    = e_lfanew + 24;
+    let dd13_off   = opt_off + 96 + 13 * 8;
+    let dir_rva    = read_u32(data, dd13_off);
+    let dir_size   = read_u32(data, dd13_off + 4);
+    if dir_rva == 0 || dir_size == 0 {
+        eprintln!("No delay-load directory in PE");
+        return false;
+    }
+    let dir_off = match rva_to_off(data, dir_rva) {
+        Some(o) => o,
+        None => { eprintln!("Delay-load directory RVA not mapped"); return false; }
+    };
+
+    const COMBASE_DLL: &[u8] = b"combase.dll";
+    let num_entries = dir_size as usize / 32;
+
+    for i in 0..num_entries {
+        let d = dir_off + i * 32;
+        let dll_name_rva = read_u32(data, d + 4);
+        if dll_name_rva == 0 { break; }
+        let dll_name_off = match rva_to_off(data, dll_name_rva) {
+            Some(o) => o,
+            None => continue,
+        };
+        let n = COMBASE_DLL.len();
+        if dll_name_off + n + 1 > data.len() { continue; }
+        let matches = data[dll_name_off..dll_name_off + n].iter().zip(COMBASE_DLL)
+            .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+            && data[dll_name_off + n] == 0;
+        if !matches { continue; }
+
+        println!("Found combase.dll delay-load descriptor at entry {i}");
+
+        let int_off = match rva_to_off(data, read_u32(data, d + 16)) {
+            Some(o) => o,
+            None => { eprintln!("INT RVA not mapped"); return false; }
+        };
+        let iat_base = match rva_to_off(data, read_u32(data, d + 12)) {
+            Some(o) => o,
+            None => { eprintln!("IAT RVA not mapped"); return false; }
+        };
+
+        let mut patched = 0usize;
+        let mut idx = 0usize;
+        loop {
+            let int_entry = read_u32(data, int_off + idx * 4);
+            if int_entry == 0 { break; }
+
+            if int_entry & 0x8000_0000 == 0 {
+                if let Some(ibn_off) = rva_to_off(data, int_entry) {
+                    let name_off = ibn_off + 2;
+                    for (api_idx, (api_name, _)) in SHIMS.iter().enumerate() {
+                        let len = api_name.len();
+                        if name_off + len + 1 > data.len() { continue; }
+                        if &data[name_off..name_off + len] != *api_name
+                            || data[name_off + len] != 0 { continue; }
+
+                        let iat_slot = iat_base + idx * 4;
+                        let current  = read_u32(data, iat_slot);
+                        let target   = shim_vas[api_idx];
+
+                        if current == target {
+                            println!("  IAT[{idx}] {} — already patched, skip", s(api_name));
+                        } else {
+                            let exe_end = image_base.saturating_add(data.len() as u32);
+                            if current < image_base || current >= exe_end {
+                                eprintln!("  Warning: IAT[{idx}] {} has unexpected value \
+                                           0x{current:08X} (not a thunk VA — PE struct changed?)",
+                                    s(api_name));
+                            }
+                            write_u32(data, iat_slot, target);
+                            println!("  IAT[{idx}] {} : 0x{current:08X} (thunk) \
+                                      → 0x{target:08X} (compat shim)", s(api_name));
+                        }
+                        patched += 1;
+                        break;
+                    }
+                }
+            }
+            idx += 1;
+        }
+
+        if patched == 0 {
+            eprintln!("No CoTaskMemFree / CoCreateFreeThreadedMarshaler entries found in INT");
+            return false;
+        }
+        println!("  Combase IAT: {patched}/2 entries patched");
+        return true;
+    }
+
+    eprintln!("combase.dll not found in delay-load directory");
     false
 }
 

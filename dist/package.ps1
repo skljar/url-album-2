@@ -1,5 +1,5 @@
 # Упаковка URL Album — один 32-битный exe, работает на Win7 SP1+ (x86 и x64).
-$version = "2.0.1"
+$version = "2.0.2"
 $root    = "C:\Projects\url-album-3"
 $srcExe  = "$root\target\i686-pc-windows-msvc\release\url-album-3.exe"
 $destDir = "$root\dist\URL-Album-$version"

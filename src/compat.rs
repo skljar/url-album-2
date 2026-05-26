@@ -367,7 +367,8 @@ unsafe fn load_ole32_fns() {
     }
 }
 
-unsafe extern "system" fn compat_CoTaskMemFree(pv: *mut c_void) {
+#[no_mangle]
+pub unsafe extern "system" fn compat_CoTaskMemFree(pv: *mut c_void) {
     if OLE32_INIT.load(Ordering::Acquire) != 2 { load_ole32_fns(); }
     let f = FN_CO_TASK_MEM_FREE;
     if f != 0 {
@@ -376,7 +377,8 @@ unsafe extern "system" fn compat_CoTaskMemFree(pv: *mut c_void) {
     }
 }
 
-unsafe extern "system" fn compat_CoCreateFreeThreadedMarshaler(
+#[no_mangle]
+pub unsafe extern "system" fn compat_CoCreateFreeThreadedMarshaler(
     punk_outer: *mut c_void,
     ppunk: *mut *mut c_void,
 ) -> i32 {

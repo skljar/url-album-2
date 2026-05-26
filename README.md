@@ -1,4 +1,4 @@
-# URL Album 2.0.1
+# URL Album 2.0.2
 
 **Portable менеджер закладок для Windows 7 SP1 / 8.1 / 10 / 11**
 
@@ -8,9 +8,9 @@
 
 ## Скачать
 
-**[Релиз v2.0.1 на GitHub](https://github.com/skljar/url-album-2/releases/latest)** — ≈6.5 МБ, portable
+**[Релиз v2.0.2 на GitHub](https://github.com/skljar/url-album-2/releases/latest)** — ≈6.5 МБ, portable
 
-Распакуй и запусти `URL-Album-2.0.1.exe`. Ничего не устанавливается.
+Распакуй и запусти `URL-Album-2.0.2.exe`. Ничего не устанавливается.
 
 ---
 
@@ -73,12 +73,12 @@
 
 1. Скачайте ZIP со [страницы релизов](https://github.com/skljar/url-album-2/releases/latest)
 2. Распакуйте в любую папку
-3. Запустите `URL-Album-2.0.1.exe`
+3. Запустите `URL-Album-2.0.2.exe`
 
 ### Файлы рядом с exe
 
 ```
-URL-Album-2.0.1.exe
+URL-Album-2.0.2.exe
 album.db          ← база закладок
 settings.json     ← ширина панели
 last_db.txt       ← последняя открытая база
@@ -89,7 +89,7 @@ Data\favicons\    ← кэш favicon
 
 ## Отличие от URL Album 2
 
-| | URL Album 2 | URL Album 2.0.1 |
+| | URL Album 2 | URL Album 2.0.2 |
 |---|---|---|
 | Минимальная ОС | Windows 10 | Windows 7 SP1 |
 | Движок UI | WebView2 (Edge) | Slint (свой) |

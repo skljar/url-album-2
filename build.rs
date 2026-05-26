@@ -42,6 +42,8 @@ fn main() {
         println!("cargo:rustc-link-arg=/EXPORT:compat_WaitOnAddress");
         println!("cargo:rustc-link-arg=/EXPORT:compat_WakeByAddressAll");
         println!("cargo:rustc-link-arg=/EXPORT:compat_WakeByAddressSingle");
+        println!("cargo:rustc-link-arg=/EXPORT:compat_CoTaskMemFree");
+        println!("cargo:rustc-link-arg=/EXPORT:compat_CoCreateFreeThreadedMarshaler");
         // __imp_* LTO protection is handled in compat::init() via black_box.
     }
 }

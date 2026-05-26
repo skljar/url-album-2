@@ -4784,7 +4784,7 @@ dependencies = [
 
 [[package]]
 name = "url-album-3"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "encoding_rs",
  "image",

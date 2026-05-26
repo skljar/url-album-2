@@ -389,3 +389,82 @@ const DLI_FAIL_GET_PROC:  u32 = 4;  // подтверждено delayimp.h + dum
    - НЕ менять константы DLI_FAIL_* на 4/5
    - НЕ пытаться runtime-registration через extern static
 4. Начать с проверки реального состояния hook-pointer через cdb/dumpbin на свежей сборке
+
+---
+
+### Сессия 2026-05-26 — Win7 полностью работает, фавиконы ОК ✅
+
+#### Проблемы, с которыми пришли
+- Win7 крэш при старте (#1 исправлен pe-patch'ом ранее)
+- Win7 крэш при "Обновить фавиконы": `STATUS_DELAY_LOAD_FAILURE` c06d007e `api-ms-win-core-synch-l1-2-0.dll`
+
+#### Что попробовали и не сработало
+
+**`__pfnDliFailureHook2` (все предыдущие попытки):**
+- hook-pointer `___pfnDliFailureHook2` = NULL в финальном exe, несмотря на `#[export_name]` + `/INCLUDE`
+- Причина: **LTO ordering**. MSVC linker при LTCG обрабатывает COFF-архивы (`delayimp.lib`) ДО битокода Rust. С `/FORCE:MULTIPLE` побеждает первое определение → NULL из delayimp.lib, а не наш Rust static.
+- Это фундаментальное ограничение: hook через linker symbol override не работает с `-C lto` на MSVC.
+
+**Убрать `/DELAYLOAD:api-ms-win-core-synch-l1-2-0.dll`:**
+- Проверено: import lib из libstd.rlib всё равно побеждает в гонке символов.
+- DLL переехала из delay-load в regular import → на Win7 краш при старте (хуже). Реверт.
+
+#### Что сработало: pe-patch delay-load IAT напрямую
+
+**Техника для случая "функции нет ни в одной Win7 DLL":**
+
+1. Экспортируем наши шим-функции из exe через `/EXPORT:` в build.rs:
+   ```
+   /EXPORT:compat_WaitOnAddress
+   /EXPORT:compat_WakeByAddressAll
+   /EXPORT:compat_WakeByAddressSingle
+   ```
+   + `#[no_mangle] pub` на функциях в compat.rs.
+
+2. В pe-patch: читаем export table exe → находим VA каждого шима.
+
+3. Находим delay-load descriptor для `api-ms-win-core-synch-l1-2-0.dll` (DataDirectory[13]).
+
+4. Идём по INT (Import Name Table) и параллельному IAT, находим `WaitOnAddress` / `WakeByAddressAll` / `WakeByAddressSingle` по имени.
+
+5. **Патчим IAT slot**: записываем VA нашего шима вместо адреса delay-load thunk'а.
+
+**Почему это правильно (в отличие от bcrypt-patch):**
+- Для bcrypt мы ХОТЕЛИ чтобы `__delayLoadHelper2` сработал (LoadLibrary("CRYPTBASE.dll") + GetProcAddress(ord 9)) → патчили только INT + DLL name.
+- Для synch нет никакой Win7 DLL с нужными функциями → патчим **IAT напрямую**, тем самым полностью обходя thunk. Первый `CALL [IAT]` прыгает сразу на шим.
+
+**Ключевой факт: Windows loader НЕ трогает delay-load IAT при старте.**
+- При загрузке exe loader обрабатывает только Regular Import Directory (DataDirectory[1]).
+- Delay Import Directory (DataDirectory[13]) **игнорируется loader'ом** — инициализация через thunk происходит только при первом runtime вызове функции.
+- Наш pe-patch записывает VA шима в IAT до запуска exe. Loader его не трогает. Патч выживает.
+
+#### Полная цепочка исправлений (итого 4 проблемы → 2 pe-patch расширения)
+
+| Проблема | Причина | Решение |
+|---|---|---|
+| `GetSystemTimePreciseAsFileTime` | Жёсткий import в kernel32, Win7 не имеет | pe-patch: переименовать в INT |
+| `ProcessPrng` (bcryptprimitives.dll) | Delay-load thunk, DLL есть но функции нет | pe-patch: DLL→CRYPTBASE.dll, ordinal 9 (SystemFunction036) |
+| `WaitOnAddress` (api-ms-win-core-synch-l1-2-0.dll) | Delay-load thunk, DLL вообще нет на Win7 | pe-patch: IAT→VA шима напрямую |
+| `___pfnDliFailureHook2` | LTO ordering: delayimp.lib NULL побеждает | Не используется — заменено pe-patch подходом |
+
+#### Диагностические команды (для будущих сессий)
+
+```powershell
+# Анализ crash dump
+$cdb = "C:\Program Files (x86)\Windows Kits\10\Debuggers\x86\cdb.exe"
+& $cdb -z <dump> -c "!analyze -v; dc <Parameter[0]> L9; da poi(<Parameter[0]>+c); q"
+# Parameter[0] из !analyze → DelayLoadInfo struct, +c (offset 12) → szDll
+
+# Проверка import/delay-load DLL списка
+$dumpbin = "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x86\dumpbin.exe"
+& $dumpbin /IMPORTS $exe 2>&1 | Select-String "\.dll$" | Sort-Object -Unique
+```
+
+#### Артефакты сессии
+- Crash dump: `C:\Users\admin\Documents\URL-Album.exe.2648.dmp` (78 MB, c06d007e на synch DLL)
+- Win7 VM: VirtualBox, dist → `Desktop\URL-Album-3\URL-Album.exe`
+- Crash dumps в Win7: `C:\CrashDumps\`
+
+#### ⏳ Возможные следующие шаги
+- Предупреждения компилятора: `non_snake_case` в pe-patch (BCRYPT/CBASE locals) — косметика
+- `api-ms-win-core-winrt-error-l1-1-0.dll` и `combase.dll` — delay-loaded, но не падают в текущих тестах (возможно не вызываются в типичных сценариях Win7). Если упадут — применить ту же IAT-patch технику.

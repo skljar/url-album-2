@@ -35,6 +35,13 @@ fn main() {
         // are never called through the DLL (our __imp_* stubs intercept them).
         println!("cargo:rustc-link-arg=/DELAYLOAD:api-ms-win-crt-runtime-l1-1-0.dll");
         println!("cargo:rustc-link-lib=delayimp");
+        // Force ___pfnDliFailureHook2 to be linked — our Rust object wins over
+        // delayimp.lib's NULL definition because user objects precede libraries.
+        println!("cargo:rustc-link-arg=/INCLUDE:___pfnDliFailureHook2");
+        // Export compat shims so pe-patch can find their VAs via the export table.
+        println!("cargo:rustc-link-arg=/EXPORT:compat_WaitOnAddress");
+        println!("cargo:rustc-link-arg=/EXPORT:compat_WakeByAddressAll");
+        println!("cargo:rustc-link-arg=/EXPORT:compat_WakeByAddressSingle");
         // __imp_* LTO protection is handled in compat::init() via black_box.
     }
 }

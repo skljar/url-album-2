@@ -140,7 +140,17 @@ fn main() {
         None => eprintln!("Warning: PE checksum field not located — skipping"),
     }
 
-    // ── 8. Write patched binary ───────────────────────────────────────────────
+    // ── 8. Redirect bcryptprimitives.dll → CRYPTBASE.dll in delay-load table ──
+    if !patch_delay_bcrypt(&mut data) {
+        eprintln!("Warning: delay-load patch for bcryptprimitives.dll failed or not needed");
+    }
+
+    // ── 9. Patch synch IAT: WaitOnAddress/WakeByAddress* → compat shims ─────
+    if !patch_synch_iat(&mut data) {
+        eprintln!("Warning: synch IAT patch failed or not needed");
+    }
+
+    // ── 10. Write patched binary ──────────────────────────────────────────────
     fs::write(&path, &data).expect("cannot write patched file");
     println!("Done:     {}", path.display());
 }
@@ -163,6 +173,317 @@ fn pe_checksum_offset(data: &[u8]) -> Option<usize> {
         return None;
     }
     Some(e_lfanew + 88)
+}
+
+// ── PE structural helpers ────────────────────────────────────────────────────
+
+fn read_u32(data: &[u8], off: usize) -> u32 {
+    u32::from_le_bytes(data[off..off + 4].try_into().unwrap())
+}
+
+fn write_u32(data: &mut [u8], off: usize, val: u32) {
+    data[off..off + 4].copy_from_slice(&val.to_le_bytes());
+}
+
+/// Convert RVA → file offset using the section table.
+/// Returns None if the RVA isn't covered by any section.
+fn rva_to_off(data: &[u8], rva: u32) -> Option<usize> {
+    // e_lfanew → PE signature → COFF header (20 bytes) → Optional Header → sections
+    let e_lfanew = read_u32(data, 0x3C) as usize;
+    // COFF SizeOfOptionalHeader at PE+20
+    let opt_size = u16::from_le_bytes(data[e_lfanew + 20..e_lfanew + 22].try_into().ok()?) as usize;
+    // Number of sections at PE+6
+    let num_sec  = u16::from_le_bytes(data[e_lfanew + 6..e_lfanew + 8].try_into().ok()?) as usize;
+    // First section header: PE sig(4) + COFF(20) + optional header
+    let sec_base = e_lfanew + 4 + 20 + opt_size;
+    for i in 0..num_sec {
+        let sh = sec_base + i * 40;
+        let va  = read_u32(data, sh + 12); // VirtualAddress
+        let vsz = read_u32(data, sh + 16); // VirtualSize (or SizeOfRawData as fallback)
+        let raw = read_u32(data, sh + 20); // PointerToRawData
+        if rva >= va && rva < va + vsz {
+            return Some((rva - va + raw) as usize);
+        }
+    }
+    None
+}
+
+/// Patch bcryptprimitives.dll → CRYPTBASE.dll in the delay-load directory,
+/// and redirect ProcessPrng (by name) → SystemFunction036 (ordinal 9).
+///
+/// Why only INT, not IAT:
+///   The delay-load IAT slot holds the address of `_tailMerge_bcryptprimitives_dll`
+///   (the thunk in .text). At runtime the thunk calls __delayLoadHelper2, which does
+///   LoadLibrary + GetProcAddress using the INT entry, then writes the resolved
+///   function address *into* the IAT slot — overwriting whatever is there.
+///   If we wrote 0x80000009 into the IAT slot now, the thunk would try to jump to
+///   virtual address 0x9 before it ever runs __delayLoadHelper2 → instant AV.
+///   Only the INT entry and the DLL name string need to change.
+fn patch_delay_bcrypt(data: &mut Vec<u8>) -> bool {
+    // IMAGE_OPTIONAL_HEADER32: DataDirectory at offset 96 from start of optional header.
+    // Each DataDirectory entry = 8 bytes (RVA + Size). Directory index 13 = Delay Import.
+    let e_lfanew = read_u32(data, 0x3C) as usize;
+    // Optional header starts at e_lfanew + 4 (PE sig) + 20 (COFF) = e_lfanew + 24
+    let opt_off = e_lfanew + 24;
+    // DataDirectory[13] = opt_off + 96 + 13*8
+    let dd13_off = opt_off + 96 + 13 * 8;
+    let dir_rva  = read_u32(data, dd13_off);
+    let dir_size = read_u32(data, dd13_off + 4);
+    if dir_rva == 0 || dir_size == 0 {
+        eprintln!("No delay-load directory in PE");
+        return false;
+    }
+
+    // ImgDelayDescr (32 bytes each, PE32 variant without grAttrs bit set uses RVAs):
+    //   +0  grAttrs       (1 = RVA-based, 0 = VA-based — old format)
+    //   +4  rvaDLLName    RVA of DLL name string
+    //   +8  rvaHmod       RVA of HMODULE slot
+    //   +12 rvaIAT        RVA of IAT array
+    //   +16 rvaINT        RVA of INT array
+    //   +20 rvaBoundIAT   RVA of bound IAT (optional)
+    //   +24 rvaUnloadIAT  RVA of unload IAT (optional)
+    //   +28 dwTimeStamp
+    let BCRYPT = b"bcryptprimitives.dll";
+    let CBASE  = b"CRYPTBASE.dll";
+    // IMAGE_ORDINAL_FLAG32 | 9  — imports SystemFunction036 (= RtlGenRandom) by ordinal.
+    // CRYPTBASE!SystemFunction036 is ordinal 9 on Win7 and all later Windows.
+    // ABI matches ProcessPrng on i686: stdcall (PVOID buf, ULONG len) -> BOOL.
+    const ORD_FLAG: u32 = 0x8000_0000;
+    const SYS036_ORD: u32 = ORD_FLAG | 9;
+
+    let num_entries = dir_size as usize / 32;
+    let dir_off = match rva_to_off(data, dir_rva) {
+        Some(o) => o,
+        None => { eprintln!("delay-load directory RVA not mapped"); return false; }
+    };
+
+    for i in 0..num_entries {
+        let d = dir_off + i * 32;
+        let dll_name_rva = read_u32(data, d + 4);
+        if dll_name_rva == 0 { break; } // sentinel entry
+
+        let dll_name_off = match rva_to_off(data, dll_name_rva) {
+            Some(o) => o,
+            None    => continue,
+        };
+        // Case-insensitive compare against "bcryptprimitives.dll"
+        let slice = &data[dll_name_off..dll_name_off + BCRYPT.len()];
+        let matches = slice.iter().zip(BCRYPT.iter())
+            .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase());
+        if !matches { continue; }
+
+        println!("Found bcryptprimitives.dll delay-load descriptor at entry {i}");
+
+        // Walk INT to find ProcessPrng (imported by name, not ordinal).
+        // INT entry = 4 bytes RVA of IMAGE_IMPORT_BY_NAME {Hint:u16, Name:[]}.
+        let int_rva = read_u32(data, d + 16);
+        let int_off = match rva_to_off(data, int_rva) {
+            Some(o) => o,
+            None    => { eprintln!("INT RVA not mapped"); return false; }
+        };
+
+        let mut int_idx = 0usize;
+        loop {
+            let entry = read_u32(data, int_off + int_idx * 4);
+            if entry == 0 { eprintln!("ProcessPrng not found in INT"); return false; }
+            if entry & ORD_FLAG != 0 { int_idx += 1; continue; } // already ordinal
+
+            let ibn_off = match rva_to_off(data, entry) {
+                Some(o) => o,
+                None    => { int_idx += 1; continue; }
+            };
+            // IMAGE_IMPORT_BY_NAME: [Hint:u16][Name:char[]]
+            let name_off = ibn_off + 2; // skip Hint
+            let name = b"ProcessPrng";
+            if data[name_off..name_off + name.len()] != *name {
+                int_idx += 1;
+                continue;
+            }
+
+            println!("  Found ProcessPrng at INT[{int_idx}] (RVA 0x{entry:08X})");
+
+            // ── Patch 1: redirect INT entry to ordinal 9 of CRYPTBASE.dll ──────
+            // This is the only field __delayLoadHelper2 reads to resolve the import.
+            // We do NOT touch the IAT slot — it holds the `_tailMerge_*` thunk address
+            // and will be overwritten by the thunk itself after successful resolution.
+            write_u32(data, int_off + int_idx * 4, SYS036_ORD);
+            println!("  INT[{int_idx}] → 0x{SYS036_ORD:08X} (IMAGE_ORDINAL_FLAG32 | 9 = CRYPTBASE!SystemFunction036)");
+            break;
+        }
+
+        // ── Patch 2: rename DLL string to CRYPTBASE.dll ──────────────────────
+        // The string buffer in .rdata is large enough (bcryptprimitives.dll = 20 chars,
+        // CRYPTBASE.dll = 13 chars). Zero-fill the remainder so no stale bytes remain.
+        data[dll_name_off..dll_name_off + BCRYPT.len() + 1].fill(0);
+        data[dll_name_off..dll_name_off + CBASE.len()].copy_from_slice(CBASE);
+        data[dll_name_off + CBASE.len()] = 0; // explicit null terminator
+        println!("  DLL name → \"CRYPTBASE.dll\"");
+
+        return true;
+    }
+
+    eprintln!("bcryptprimitives.dll not found in delay-load directory");
+    false
+}
+
+/// Reads the exe's export table and returns VA (image_base + RVA) of a named function.
+fn find_export_va(data: &[u8], target: &[u8]) -> Option<u32> {
+    let e_lfanew   = read_u32(data, 0x3C) as usize;
+    let image_base = read_u32(data, e_lfanew + 24 + 28); // PE32 Optional Header: ImageBase
+    let opt_off    = e_lfanew + 24;
+    let exp_rva    = read_u32(data, opt_off + 96);        // DataDirectory[0].VirtualAddress
+    if exp_rva == 0 { return None; }
+    let exp_off = rva_to_off(data, exp_rva)?;
+
+    let num_names = read_u32(data, exp_off + 24) as usize;
+    let funcs_off = rva_to_off(data, read_u32(data, exp_off + 28))?;
+    let names_off = rva_to_off(data, read_u32(data, exp_off + 32))?;
+    let ords_off  = rva_to_off(data, read_u32(data, exp_off + 36))?;
+
+    for i in 0..num_names {
+        let name_off = rva_to_off(data, read_u32(data, names_off + i * 4))?;
+        let len = target.len();
+        if name_off + len + 1 > data.len() { continue; }
+        if &data[name_off..name_off + len] == target && data[name_off + len] == 0 {
+            let ord = u16::from_le_bytes(
+                data[ords_off + i * 2..ords_off + i * 2 + 2].try_into().ok()?
+            ) as usize;
+            return Some(image_base + read_u32(data, funcs_off + ord * 4));
+        }
+    }
+    None
+}
+
+/// Patches the delay-load IAT for api-ms-win-core-synch-l1-2-0.dll so that
+/// WaitOnAddress / WakeByAddressAll / WakeByAddressSingle jump directly to
+/// the compat shims built into the exe, bypassing the delay-load thunk entirely.
+///
+/// Why IAT (not INT) here, unlike the bcrypt patch:
+///   For bcrypt we still wanted __delayLoadHelper2 to run — it does LoadLibrary
+///   ("CRYPTBASE.dll") + GetProcAddress(ord 9) at runtime.  For the synch APIs
+///   there is no Win7 DLL to load; we want the thunk to NEVER fire.
+///   Pre-patching the IAT slot with our shim VA means the first CALL [IAT] jumps
+///   straight to the shim — __delayLoadHelper2 and LoadLibrary are never reached.
+///   The Windows loader does NOT touch the delay-load IAT at startup (only the
+///   regular import IAT is processed by the loader), so our patch survives.
+fn patch_synch_iat(data: &mut Vec<u8>) -> bool {
+    const SHIMS: [(&[u8], &[u8]); 3] = [
+        (b"WaitOnAddress",       b"compat_WaitOnAddress"),
+        (b"WakeByAddressAll",    b"compat_WakeByAddressAll"),
+        (b"WakeByAddressSingle", b"compat_WakeByAddressSingle"),
+    ];
+
+    // ── Resolve shim VAs from the exe export table ───────────────────────────
+    let mut shim_vas = [0u32; 3];
+    for (i, (_, shim_name)) in SHIMS.iter().enumerate() {
+        match find_export_va(data, shim_name) {
+            Some(va) => {
+                println!("  Export {}: VA=0x{va:08X}", s(shim_name));
+                shim_vas[i] = va;
+            }
+            None => {
+                eprintln!("Export '{}' not found — /EXPORT: missing in build.rs?", s(shim_name));
+                return false;
+            }
+        }
+    }
+
+    // ── Find delay-load descriptor for api-ms-win-core-synch-l1-2-0.dll ─────
+    let e_lfanew   = read_u32(data, 0x3C) as usize;
+    let image_base = read_u32(data, e_lfanew + 24 + 28);
+    let opt_off    = e_lfanew + 24;
+    let dd13_off   = opt_off + 96 + 13 * 8;
+    let dir_rva    = read_u32(data, dd13_off);
+    let dir_size   = read_u32(data, dd13_off + 4);
+    if dir_rva == 0 || dir_size == 0 {
+        eprintln!("No delay-load directory in PE");
+        return false;
+    }
+    let dir_off = match rva_to_off(data, dir_rva) {
+        Some(o) => o,
+        None => { eprintln!("Delay-load directory RVA not mapped"); return false; }
+    };
+
+    const SYNCH_DLL: &[u8] = b"api-ms-win-core-synch-l1-2-0.dll";
+    let num_entries = dir_size as usize / 32;
+
+    for i in 0..num_entries {
+        let d = dir_off + i * 32;
+        let dll_name_rva = read_u32(data, d + 4);
+        if dll_name_rva == 0 { break; }
+        let dll_name_off = match rva_to_off(data, dll_name_rva) {
+            Some(o) => o,
+            None => continue,
+        };
+        let n = SYNCH_DLL.len();
+        if dll_name_off + n + 1 > data.len() { continue; }
+        let matches = data[dll_name_off..dll_name_off + n].iter().zip(SYNCH_DLL)
+            .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+            && data[dll_name_off + n] == 0;
+        if !matches { continue; }
+
+        println!("Found api-ms-win-core-synch-l1-2-0.dll delay-load descriptor at entry {i}");
+
+        let int_off = match rva_to_off(data, read_u32(data, d + 16)) {
+            Some(o) => o,
+            None => { eprintln!("INT RVA not mapped"); return false; }
+        };
+        let iat_base = match rva_to_off(data, read_u32(data, d + 12)) {
+            Some(o) => o,
+            None => { eprintln!("IAT RVA not mapped"); return false; }
+        };
+
+        let mut patched = 0usize;
+        let mut idx = 0usize;
+        loop {
+            let int_entry = read_u32(data, int_off + idx * 4);
+            if int_entry == 0 { break; }
+
+            if int_entry & 0x8000_0000 == 0 { // import by name
+                if let Some(ibn_off) = rva_to_off(data, int_entry) {
+                    let name_off = ibn_off + 2; // skip Hint word
+                    for (api_idx, (api_name, _)) in SHIMS.iter().enumerate() {
+                        let len = api_name.len();
+                        if name_off + len + 1 > data.len() { continue; }
+                        if &data[name_off..name_off + len] != *api_name
+                            || data[name_off + len] != 0 { continue; }
+
+                        let iat_slot = iat_base + idx * 4;
+                        let current  = read_u32(data, iat_slot);
+                        let target   = shim_vas[api_idx];
+
+                        if current == target {
+                            println!("  IAT[{idx}] {} — already patched, skip", s(api_name));
+                        } else {
+                            // Safety: current should be a thunk VA within the exe image
+                            let exe_end = image_base.saturating_add(data.len() as u32);
+                            if current < image_base || current >= exe_end {
+                                eprintln!("  Warning: IAT[{idx}] {} has unexpected value \
+                                           0x{current:08X} (not a thunk VA — PE struct changed?)",
+                                    s(api_name));
+                            }
+                            write_u32(data, iat_slot, target);
+                            println!("  IAT[{idx}] {} : 0x{current:08X} (thunk) \
+                                      → 0x{target:08X} (compat shim)", s(api_name));
+                        }
+                        patched += 1;
+                        break;
+                    }
+                }
+            }
+            idx += 1;
+        }
+
+        if patched == 0 {
+            eprintln!("No WaitOnAddress / WakeByAddress* entries found in INT");
+            return false;
+        }
+        println!("  Synch IAT: {patched}/3 entries patched");
+        return true;
+    }
+
+    eprintln!("api-ms-win-core-synch-l1-2-0.dll not found in delay-load directory");
+    false
 }
 
 fn s(b: &[u8]) -> &str {

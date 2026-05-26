@@ -1,6 +1,6 @@
 # Мониторинг темы ru-board — URL Album 2
 
-Дата проверки: 2026-05-26
+Дата проверки: 2026-05-26 (повторная проверка)
 
 ## ⚠️ Ошибка доступа — форум недоступен из облачного окружения
 
@@ -8,14 +8,17 @@
 - https://forum.ru-board.com/topic.cgi?forum=5&topic=3250&start=860
 - https://forum.ru-board.com/topic.cgi?forum=5&topic=3250&start=880
 
-**Проблема:** Облачный контейнер Claude Code (remote execution environment) не имеет сетевого доступа к `forum.ru-board.com`.
+**Проблема:** Форум возвращает HTTP 403 Forbidden на все запросы из облачного окружения.
 
 | Метод | Результат |
 |---|---|
-| `WebFetch` (HTTPS) | HTTP 403 Forbidden |
-| `curl` с браузерным User-Agent (HTTP) | `Host not in allowlist` — домен заблокирован egress-политикой |
+| `WebFetch` HTTPS start=860 | HTTP 403 Forbidden |
+| `WebFetch` HTTPS start=880 | HTTP 403 Forbidden |
+| `WebFetch` HTTP start=860 | HTTP 403 Forbidden |
+| Wayback Machine | Заблокирован в данном окружении |
+| Google Cache поиск | Нет свежих копий (только до start=720) |
 
-Домен `forum.ru-board.com` не входит в список разрешённых исходящих соединений данного окружения. Это сетевая политика контейнера, обойти её нельзя.
+По данным поисковых результатов, форум ru-board **заблокирован рядом российских провайдеров с марта 2026 года**. Возможно, сервер отвергает запросы без браузерных cookie/сессии.
 
 ---
 

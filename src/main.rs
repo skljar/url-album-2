@@ -489,6 +489,20 @@ fn update_detail(ui: &MainWindow, st: &State) {
     ui.set_active_bookmark(0);
 }
 
+/// Expands all ancestor folders of a bookmark in the tree so the bookmark
+/// becomes visible after build_tree_model() is called.
+/// Equivalent to URL-Album-2's expandTreePath(parentFolderId) + _activateTreeItem.
+/// Errors from DB are silently skipped — the detail view still opens.
+// TODO: scroll tree ScrollView to selected bookmark when out of viewport.
+// Requires computing Y position from variable-height tree-nodes — separate task.
+fn expand_path_to(st: &mut State, bookmark_id: i64) {
+    let mut cur = st.db.get_node_parent(bookmark_id);
+    while let Some(folder_id) = cur {
+        st.expanded.insert(folder_id);
+        cur = st.db.get_node_parent(folder_id);
+    }
+}
+
 fn open_url(url: &str) {
     let url = normalize_url(url);
     if url.is_empty() { return; }
@@ -780,11 +794,13 @@ fn main() {
         update_detail(&ui, &st);
     }); }
 
-    // Bookmark clicked in tree → show detail (без перестройки дерева)
+    // Bookmark clicked in tree → expand ancestor folders, show detail
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_tree_bookmark_clicked(move |id| {
         let ui = w.unwrap(); let mut st = s.lock().unwrap();
         st.selected_bookmark = Some(id as i64);
+        expand_path_to(&mut st, id as i64);
+        ui.set_tree_nodes(st.build_tree_model());
         update_detail(&ui, &st); }); }
 
     // Back to list mode (Escape or "← Назад")
@@ -817,11 +833,13 @@ fn main() {
         st.expanded.insert(id as i64); st.save_settings();
         refresh_ui(&ui, &st); }); }
 
-    // Bookmark clicked in right panel → show detail
+    // Bookmark clicked in right panel → expand ancestor folders in tree, show detail
     { let s = state.clone(); let w = ui.as_weak();
       ui.on_right_bookmark_clicked(move |id| {
         let ui = w.unwrap(); let mut st = s.lock().unwrap();
         st.selected_bookmark = Some(id as i64);
+        expand_path_to(&mut st, id as i64);
+        ui.set_tree_nodes(st.build_tree_model());
         ui.set_right_items(st.build_right_panel_model());
         update_detail(&ui, &st); }); }
 

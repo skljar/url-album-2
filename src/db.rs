@@ -177,6 +177,14 @@ impl Database {
         self.conn.query_row("SELECT title FROM nodes WHERE id=?1", params![id], |r| r.get(0)).ok()
     }
 
+    /// Returns the parent folder id of any node (bookmark or folder), or None if root/missing.
+    pub fn get_node_parent(&self, id: i64) -> Option<i64> {
+        self.conn.query_row(
+            "SELECT parent FROM nodes WHERE id=?1",
+            params![id], |r| r.get::<_, Option<i64>>(0),
+        ).ok().flatten()
+    }
+
     pub fn create_bookmark(&self, parent_id: i64, title: &str, url: &str) -> Result<i64> {
         let t = if title.is_empty() { url } else { title };
         self.conn.execute("INSERT INTO nodes (parent,kind,title,url) VALUES (?1,'bookmark',?2,?3)", params![parent_id, t, url])?;

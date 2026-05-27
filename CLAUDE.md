@@ -554,3 +554,44 @@ $dumpbin = "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSV
 - Heredoc-синтаксис bash `$(cat <<'EOF' ... EOF)` НЕ работает в PowerShell — использовать многократный `-m` или here-string `@"..."@`
 - `gh` CLI и `git` имеют разные credentials — `gh auth login` нужно делать ИНТЕРАКТИВНО в отдельном PowerShell (Claude Code не может это запустить)
 - При rebase из remote всегда возможны merge-конфликты в README — наша актуальная версия побеждает
+
+---
+
+### Сессия 2026-05-27 — UX правой панели + разведка скриншотов
+
+#### Что сделано
+- Tree-sync при клике на закладку в правой панели (commit fb4c4cb)
+- TouchArea на превью карточки и URL-баре: double-click открывает URL, right-click показывает контекстное меню (commit 1879441)
+- Финальный commit: push 1879441 в origin/master
+- Win7 SP1 x64 VM (Opera 95 portable) + Win10 — обе фичи протестированы
+
+#### Изменения
+- src/db.rs: добавлена get_node_parent(id) для обхода предков
+- src/main.rs: функция expand_path_to(), изменены on_tree_bookmark_clicked и on_right_bookmark_clicked
+- ui/main_window.slint: TouchArea в Preview Rectangle и в URL bar Rectangle карточки
+
+#### Разведка по скриншотам (для следующей сессии)
+- Подход: установленный Chromium-браузер через headless CLI
+- Проверено на Win7 с Opera 95 (Chromium 109): команда работает
+- Поиск браузера: сначала default через реестр Windows (HKCU\...\UserChoice\ProgId), потом fallback по стандартным путям
+- Chromium ProgId: ChromeHTML, MSEdgeHTM, OperaStable, BraveHTML, VivaldiBrowser, YandexBrowser
+- Хранение: Data/screenshots/<id>.png
+- Контекстное меню: добавить пункты "Сделать скриншот" и "Удалить скриншот"
+- Отображение: Image в Preview Rectangle вместо/поверх фавиконки
+- Threading: запуск браузера в отдельном thread + slint::invoke_from_event_loop для UI
+
+#### Win7 фиксы (полная цепочка)
+| Проблема | Решение |
+|---|---|
+| GetSystemTimePreciseAsFileTime | pe-patch rename → GetSystemTimeAsFileTime |
+| ProcessPrng (bcryptprimitives.dll) | pe-patch → CRYPTBASE.dll ordinal 9 |
+| WaitOnAddress (api-ms-win-core-synch) | pe-patch IAT → compat shim |
+| CoTaskMemFree (combase.dll) | pe-patch IAT → compat shim |
+
+#### Текущая версия
+2.0.2 — не менялась в этой сессии. Релиз 2.0.3 откладывается до завершения скриншотов.
+
+#### Уроки сессии
+- Сначала разведка, потом план без кода, потом реализация — это работает, минимизирует переделки
+- Slint TouchArea: размещение last child для overlay (превью), first child когда есть Button (URL bar) — для корректного z-order
+- Headless screenshot через Chromium CLI работает на любой Windows (Win7+) где есть установленный Chromium-браузер

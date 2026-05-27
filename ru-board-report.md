@@ -14,13 +14,11 @@
 |---|---|
 | `WebFetch` HTTPS start=860 | HTTP 403 Forbidden |
 | `WebFetch` HTTPS start=880 | HTTP 403 Forbidden |
-| `curl` (прямой запрос) | `Host not in allowlist` — сеть облака заблокирована |
-| Wayback Machine | Заблокирован в данном окружении |
-| ru-board.club (зеркало) | `Host not in allowlist` |
 | Google Cache | HTTP 403 |
+| web.archive.org | Заблокирован в данном окружении |
 
 **Причины:**
-1. **Сетевая политика облачной среды** — egress ограничен; forum.ru-board.com не в allowlist.
+1. **Сетевая политика облачной среды** — egress ограничен; forum.ru-board.com возвращает 403 с зарубежных IP.
 2. **Блокировка форума** — по данным downradar.ru и isitdownrightnow.com, форум заблокирован рядом российских провайдеров с марта 2026 года и недоступен без VPN.
 
 ---

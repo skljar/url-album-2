@@ -1004,12 +1004,33 @@ export component MainWindow inherits Window {
                                     height: 28px;
                                 }
                             }
+
+                            TouchArea {
+                                double-clicked => { root.bookmark-open(root.detail-url); }
+                                pointer-event(e) => {
+                                    if e.button == PointerEventButton.right && e.kind == PointerEventKind.down {
+                                        root.ctx-x = self.absolute-position.x + self.mouse-x;
+                                        root.ctx-y = self.absolute-position.y + self.mouse-y;
+                                        root.bookmark-right-click(root.active-bookmark);
+                                    }
+                                }
+                            }
                         }
 
                         // ── URL-бар снизу (как в URL Album 2) ──
                         Rectangle {
                             height: 26px; background: white;
                             border-color: #ccc; border-width: 1px;
+                            TouchArea {
+                                double-clicked => { root.bookmark-open(root.detail-url); }
+                                pointer-event(e) => {
+                                    if e.button == PointerEventButton.right && e.kind == PointerEventKind.down {
+                                        root.ctx-x = self.absolute-position.x + self.mouse-x;
+                                        root.ctx-y = self.absolute-position.y + self.mouse-y;
+                                        root.bookmark-right-click(root.active-bookmark);
+                                    }
+                                }
+                            }
                             HorizontalBox {
                                 padding-left: 6px; padding-right: 4px;
                                 padding-top: 2px; padding-bottom: 2px; spacing: 4px;

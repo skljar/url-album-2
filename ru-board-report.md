@@ -1,5 +1,5 @@
 # Мониторинг темы ru-board — URL Album 2
-Дата проверки: 2026-05-30
+Дата проверки: 2026-05-30 (обновлено)
 
 ## ⚠️ Ошибка доступа — форум недоступен из облачного окружения
 
@@ -20,6 +20,12 @@
 | web.archive.org | Недоступен из sandbox |
 | archive.ph | Недоступен из sandbox |
 | Google Translate proxy | 403 Forbidden (прокси) |
+| RSS-кэш board1338.rssing.com | 403 Forbidden |
+| RSS-кэш board4520.rssing.com | 403 Forbidden |
+| RSS-кэш board4524.rssing.com | 403 Forbidden |
+| Зеркало ru-board.club | 403 Forbidden |
+| downradar.ru (статус форума) | 403 Forbidden |
+| Google поиск по site:forum.ru-board.com | Только заголовки страниц, без текста постов |
 
 ---
 

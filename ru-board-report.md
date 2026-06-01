@@ -1,30 +1,24 @@
 # Мониторинг темы ru-board — URL Album 2
-Дата проверки: 2026-05-31
+Дата проверки: 2026-06-01
 
-## ⚠️ Ошибка доступа — форум недоступен из облачного окружения
+## ⚠️ Форум недоступен — две причины
 
 **URL проверки:**
 - https://forum.ru-board.com/topic.cgi?forum=5&topic=3250&start=860
 - https://forum.ru-board.com/topic.cgi?forum=5&topic=3250&start=880
 
-**Причина:** Облачное окружение Claude Code имеет ограничительную egress-политику — исходящий трафик проходит через прокси Anthropic с белым списком разрешённых хостов. `forum.ru-board.com` в этот список не входит.
+**Причина 1 (основная): Роскомнадзор заблокировал forum.ru-board.com 4 марта 2026 года** в рамках антипиратского законодательства. Это подтверждается новостями и дискуссиями ([Пикабу](https://pikabu.ru/story/roskomnadzor_dobralsya_dazhe_do_kompyuternogo_foruma_ruboard_13755560), [downradar.ru](https://downradar.ru/reviews/forum.ru-board.com)).
 
-Диагноз подтверждён через `curl -v`: ответ сервера `403 x-deny-reason: host_not_allowed` (от прокси `sandbox-egress-production`, а не от форума).
+**Причина 2 (дополнительная):** Облачное окружение Claude Code имеет ограничительную egress-политику — исходящий трафик проходит через прокси Anthropic. `forum.ru-board.com` не входит в список разрешённых хостов.
 
 | Метод | Результат |
 |---|---|
-| `WebFetch` HTTPS start=860 | HTTP 403 Forbidden (прокси) |
-| `WebFetch` HTTPS start=880 | HTTP 403 Forbidden (прокси) |
-| `curl` с User-Agent | Host not in allowlist |
-| Google Cache | 403 Forbidden (прокси) |
+| `WebFetch` HTTPS start=860 | HTTP 403 Forbidden |
+| `WebFetch` HTTPS start=880 | HTTP 403 Forbidden |
+| `WebFetch` HTTP start=860 | HTTP 403 Forbidden |
+| Зеркало ru-board.club | HTTP 403 Forbidden |
+| RSS-кэш rssing.com | HTTP 403 Forbidden |
 | web.archive.org | Недоступен из sandbox |
-| archive.ph | Недоступен из sandbox |
-| Google Translate proxy | 403 Forbidden (прокси) |
-| RSS-кэш board1338.rssing.com | 403 Forbidden |
-| RSS-кэш board4520.rssing.com | 403 Forbidden |
-| RSS-кэш board4524.rssing.com | 403 Forbidden |
-| Зеркало ru-board.club | 403 Forbidden |
-| downradar.ru (статус форума) | 403 Forbidden |
 | Google поиск по site:forum.ru-board.com | Только заголовки страниц, без текста постов |
 
 ---

@@ -7,25 +7,26 @@
 - https://forum.ru-board.com/topic.cgi?forum=5&topic=3250&start=860
 - https://forum.ru-board.com/topic.cgi?forum=5&topic=3250&start=880
 
-**Причина 1 (основная): Роскомнадзор заблокировал forum.ru-board.com 4 марта 2026 года** в рамках антипиратского законодательства. Это подтверждается новостями и дискуссиями ([Пикабу](https://pikabu.ru/story/roskomnadzor_dobralsya_dazhe_do_kompyuternogo_foruma_ruboard_13755560), [downradar.ru](https://downradar.ru/reviews/forum.ru-board.com)).
+**Причина 1 (основная): Роскомнадзор заблокировал forum.ru-board.com 4 марта 2026 года** в рамках антипиратского законодательства.
 
-**Причина 2 (дополнительная):** Облачное окружение Claude Code имеет ограничительную egress-политику — исходящий трафик проходит через прокси Anthropic. `forum.ru-board.com` не входит в список разрешённых хостов.
+**Причина 2 (дополнительная):** Облачное окружение Claude Code имеет ограничительную egress-политику. `forum.ru-board.com` и архивные сервисы не входят в список разрешённых хостов. Диагноз подтверждён через `curl -v`: ответ прокси `403 x-deny-reason: host_not_allowed`.
 
 | Метод | Результат |
 |---|---|
 | `WebFetch` HTTPS start=860 | HTTP 403 Forbidden |
 | `WebFetch` HTTPS start=880 | HTTP 403 Forbidden |
-| `WebFetch` HTTP start=860 | HTTP 403 Forbidden |
-| Зеркало ru-board.club | HTTP 403 Forbidden |
-| RSS-кэш rssing.com | HTTP 403 Forbidden |
-| web.archive.org | Недоступен из sandbox |
-| Google поиск по site:forum.ru-board.com | Только заголовки страниц, без текста постов |
+| `curl` с Browser User-Agent | Host not in allowlist |
+| `web.archive.org` (CDX API) | Host not in allowlist |
+| `webcache.googleusercontent.com` | Host not in allowlist |
+| `WebFetch` web.archive.org | Заблокирован политикой |
+| Google Cache | 403 Forbidden (прокси) |
+| archive.ph | Недоступен из sandbox |
 
 ---
 
 ## Новые сообщения в теме ru-board (URL Album 2)
 
-**Статус:** данные не получены — форум недоступен из облачного окружения.
+**Статус:** данные не получены — форум и архивы недоступны из облачного окружения.
 
 ---
 
@@ -33,7 +34,7 @@
 
 ### Вариант 1: Вставить текст сообщений в чат (рекомендуется)
 
-1. Откройте в браузере страницы start=860 и start=880
+1. Откройте в браузере страницы start=860 и start=880 (через VPN если заблокировано у вас)
 2. Скопируйте текст сообщений (Ctrl+A → Ctrl+C или выделить вручную)
 3. Вставьте в чат — Claude проанализирует и заполнит отчёт в формате:
    - 🐛 Баги → файл для правки
